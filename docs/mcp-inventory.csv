@@ -1,0 +1,14 @@
+path,symbol,usage_type,runtime_context,entrypoints,auth/context,notes
+codex-rs/mcp-types/src/lib.rs,mcp_types (generated types),schema,"shared (client + server + core + tui + protocol)","ModelContextProtocolRequest; ModelContextProtocolNotification; JSONRPCMessage; ClientRequest; ServerNotification",none (pure types),"Private schema/types crate at version 2025-06-18; replaces JSON-RPC envelopes and typed requests."
+codex-rs/mcp-client/src/mcp_client.rs,McpClient,client,"codex-core child client for external MCP servers (stdio)","new_stdio_client; initialize; list_tools; call_tool; send_request; send_notification","env filter for child via DEFAULT_ENV_VARS","Manual JSON-RPC over Tokio pipes; bounded channels; notifications only logged."
+codex-rs/mcp-server/src/lib.rs,run_main,server,"codex mcp stdio server process","run_main","uses AuthManager inside handlers","Spawns stdin/stdout loops; routes messages via MessageProcessor; writes JSON lines to stdout."
+codex-rs/mcp-server/src/message_processor.rs,MessageProcessor,server/handlers,"codex mcp server handlers","process_request; process_response; process_notification; handle_initialize; handle_list_tools; handle_call_tool","AuthManager + ConversationManager; approvals via elicitation","Bridges Codex ops to MCP; exposes codex and codex-reply tools; streams events as notifications."
+codex-rs/mcp-server/src/outgoing_message.rs,OutgoingMessageSender/OutgoingMessage,server/transport,"codex mcp server","send_response; send_notification; send_event_as_notification; send_server_notification; send_error; send_request",n/a,"Centralizes JSON-RPC envelopes; _meta.requestId support."
+codex-rs/core/src/mcp_connection_manager.rs,McpConnectionManager,client/aggregator,"codex core","new; list_all_tools; call_tool; parse_tool_name",n/a,"Spawns clients; aggregates tools; fq-name qualification; timeouts; startup errors surfaced."
+codex-rs/core/src/mcp_tool_call.rs,handle_mcp_tool_call,client/adapter,"codex core","handle_mcp_tool_call",n/a,"Emits begin/end events; converts args JSON; maps results/errors to Codex protocol."
+codex-rs/protocol/src/mcp_protocol.rs,Codex<->MCP protocol bridge,schema/config,shared,"ClientRequest variants use mcp_types::RequestId; ServerNotification mapping",n/a,"Bridges Codex events to MCP notifications and vice versa."
+codex-rs/tui/src/history_cell.rs,History MCP renderers,ui,"tui renderer","render CallToolResult/EmbeddedResource",n/a,"Uses mcp_types enums for rendering tool outputs/resources."
+docs/advanced.md,MCP docs,docs,n/a,"mcp_servers config; experimental codex mcp",n/a,"Documents stdio transport and notes on server mode."
+docs/config.md,mcp_servers config,config/docs,n/a,"mcp_servers.<id>.* keys",n/a,"Stdio only; SSE via proxy mention."
+.github/workflows/rust-ci.yml,CI mcp-types check,CI,github actions,"verify codegen for mcp-types",n/a,"Ensures mcp-types is in sync with generator."
+

@@ -41,6 +41,10 @@ pub use crate::exec_approval::ExecApprovalResponse;
 pub use crate::patch_approval::PatchApprovalElicitRequestParams;
 pub use crate::patch_approval::PatchApprovalResponse;
 
+// Optional rmcp-based server handlers (feature gated). Not yet wired into run_main.
+#[cfg(feature = "rmcp_sdk")]
+mod rmcp_handlers;
+
 /// Size of the bounded channels used to communicate between tasks. The value
 /// is a balance between throughput and memory usage – 128 messages should be
 /// plenty for an interactive CLI.

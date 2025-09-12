@@ -1,0 +1,6 @@
+symbol,path,fan_in,fan_out,entrypoints
+McpClient,codex-rs/mcp-client/src/mcp_client.rs,1,4,"new_stdio_client; initialize; list_tools; call_tool"
+McpConnectionManager,codex-rs/core/src/mcp_connection_manager.rs,1,2,"new; call_tool"
+MessageProcessor,codex-rs/mcp-server/src/message_processor.rs,1,6,"process_request; process_response; process_notification; handle_*"
+OutgoingMessageSender,codex-rs/mcp-server/src/outgoing_message.rs,2,0,"send_response; send_notification; send_event_as_notification; send_error; send_request"
+history_cell renderers,codex-rs/tui/src/history_cell.rs,1,0,"render(CallToolResult); render(EmbeddedResource)"
