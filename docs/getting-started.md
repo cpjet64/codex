@@ -98,3 +98,25 @@ codex completion fish
 #### `--cd`/`-C` flag
 
 Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
+
+### MCP quick start
+
+Codex can connect to MCP servers and can also run as an MCP server.
+
+- Configure external servers via `~/.codex/config.toml`:
+
+  ```toml
+  [mcp_servers.example]
+  command = "npx"
+  args = ["-y", "my-mcp-server"]
+  env = { API_KEY = "value" }
+  ```
+
+- Launch Codex (it will connect on demand): `codex`
+
+- Run Codex as an MCP server: `codex mcp`
+
+For flags, precedence, and advanced options, see:
+
+- Config: `mcp_servers` and implementation switches in [docs/config.md](./config.md#mcp_servers)
+- Usage and examples in [docs/advanced.md](./advanced.md#model-context-protocol-mcp)

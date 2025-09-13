@@ -25,11 +25,83 @@ Codex supports a rich set of configuration options. Note that the Rust CLI uses 
 
 Codex CLI functions as an MCP client that can connect to MCP servers on startup. See the [`mcp_servers`](../docs/config.md#mcp_servers) section in the configuration documentation for details.
 
-It is still experimental, but you can also launch Codex as an MCP _server_ by running `codex mcp`. Use the [`@modelcontextprotocol/inspector`](https://github.com/modelcontextprotocol/inspector) to try it out:
+You can also launch Codex as an MCP _server_ by running `codex mcp`. Use the [`@modelcontextprotocol/inspector`](https://github.com/modelcontextprotocol/inspector) to try it out:
 
 ```shell
 npx @modelcontextprotocol/inspector codex mcp
 ```
+
+When running as a server, Codex honors the same sandbox and approval settings as the interactive CLI. For example:
+
+```bash
+# Allow workspace writes in the sandbox and ask for approval on failure
+codex --sandbox=workspace-write --ask-for-approval=on-failure mcp
+```
+
+#### MCP Implementation Switches (Server and Client)
+
+Codex supports both the original “legacy” MCP implementation and the official Rust MCP SDK (RMCP). You can choose the implementation for both the MCP server (`codex mcp`) and the embedded MCP client (used when Codex connects to external MCP servers configured in `config.toml`). Defaults remain “legacy”.
+
+- Server (codex mcp): selects how the Codex MCP server is implemented.
+- Client (MCP connections): selects which client is used to talk to configured MCP servers.
+
+Config defaults (recommended)
+
+Add either or both to `~/.codex/config.toml` (Windows: `C:\Users\<you>\.codex\config.toml`). These act as defaults when no flag/env is provided.
+
+```toml
+# Server implementation default for `codex mcp`
+#   values: "legacy" (default), "official"
+mcp_impl = "legacy"
+
+# Client implementation default when Codex connects to external MCP servers
+#   values: "legacy" (default), "official"
+mcp_client_impl = "legacy"
+```
+
+CLI flags (highest precedence)
+
+- Server (when running `codex mcp`):
+  - `--mcp-impl legacy|official`
+  - Example: `codex --mcp-impl=official mcp`
+
+- Client (when connecting to configured servers):
+  - `--mcp-client-impl legacy|official`
+  - Example: `codex --mcp-client-impl=official`
+
+Environment variables
+
+- Server: `CODEX_MCP_IMPL=legacy|official`
+- Client: `CODEX_MCP_CLIENT_IMPL=legacy|official`
+
+Precedence
+
+- Server: CLI flag > `CODEX_MCP_IMPL` > `mcp_impl` in config > legacy
+- Client: CLI flag > `CODEX_MCP_CLIENT_IMPL` (or process override) > `mcp_client_impl` in config > legacy
+
+Notes
+
+- The server and client switches are independent. You can run the Codex MCP server with the official SDK while still using the legacy client to connect to other servers, or vice versa.
+- The flags act as a safe rollback switch; defaults stay on legacy until you explicitly opt into the official SDK.
+
+For more examples and precedence rules, see [docs/advanced.md](../docs/advanced.md#model-context-protocol-mcp) and [docs/config.md](../docs/config.md#mcp-implementation-clientserver).
+
+##### Migration note: Official MCP approvals
+
+When using the official RMCP implementation for the Codex MCP server (selected via `--mcp-impl=official` or `mcp_impl = "official"`), approval requests are forwarded using the SDK’s typed “elicitation” API:
+
+- Requests use method `elicitation/create` and include the standard fields (`message`, `requestedSchema`). Any Codex‑specific correlators are preserved under `params._meta` (for example: `codex_elicitation`, `codex_mcp_tool_call_id`, `codex_event_id`, `codex_call_id`, etc.).
+- Clients must respond with the typed elicitation result shape, e.g. `{ "action": "accept" }` (or `"decline"`, `"cancel"`). The server maps this to Codex’s legacy decision internally so existing flows continue to work.
+
+Legacy implementation differences for reference:
+
+- Requests previously placed Codex fields at the top level of `params` and tests often replied with a legacy response like `{ "decision": "approved" }`.
+
+During the transition:
+
+- Defaults remain on the legacy path; use the flags to opt into the official SDK for server and/or client independently.
+- CI should run both implementations to ensure feature parity.
+- Once parity is stable, we will flip the default to the official SDK and keep the rollback flag for 1–2 releases before removing the legacy code.
 
 ### Notifications
 

@@ -39,13 +39,23 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [features]
+default = ["rmcp_sdk"]
 rmcp_sdk = ["dep:rmcp"]
 
 [dependencies.rmcp]
 version = "=0.6.4"
 optional = true
 default-features = false
-features = ["server"]
+features = [
+  "server",
+  "transport-io",
+  "macros",
+  "base64",
+  "schemars",
+  # For future typed elicitation support; currently not used to keep params transparent.
+  "elicitation",
+]
+
 
 [dev-dependencies]
 assert_cmd = "2"
@@ -53,5 +63,6 @@ base64 = "0.22"
 mcp_test_support = { path = "tests/common" }
 os_info = "3.12.0"
 pretty_assertions = "1.4.1"
+shell-escape = "0.1.5"
 tempfile = "3"
 wiremock = "0.6"

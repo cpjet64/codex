@@ -30,4 +30,15 @@ rmcp_sdk = ["dep:rmcp"]
 version = "=0.6.4"
 optional = true
 default-features = false
-features = ["server"]
+features = [
+  "client",
+  "server",                  # needed because rmcp's schema helpers reference handler::server
+  "transport-child-process",
+  "macros",
+  "base64",
+  "schemars",
+]
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"

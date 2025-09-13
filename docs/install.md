@@ -38,3 +38,23 @@ cargo clippy --tests
 # Run the tests.
 cargo test
 ``` 
+
+### Optional: MCP tools and quick verification
+
+You can experiment with Codex’s MCP server mode using the MCP Inspector (Node.js required):
+
+```bash
+# Start Codex as an MCP server (legacy impl)
+codex mcp
+
+# In a separate terminal, connect with the Inspector
+npx @modelcontextprotocol/inspector codex mcp
+```
+
+Switch to the official SDK implementation:
+
+```bash
+codex --mcp-impl=official mcp
+```
+
+To connect to external MCP servers from Codex, add them under `mcp_servers` in `~/.codex/config.toml` (see docs/config.md#mcp_servers).

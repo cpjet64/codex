@@ -43,6 +43,8 @@ use std::process::Command as StdCommand;
 use tokio::process::Command;
 
 pub struct McpProcess {
+    impl_official: bool,
+
     next_request_id: AtomicI64,
     /// Retain this child process until the client is dropped. The Tokio runtime
     /// will make a "best effort" to reap the process after it exits, but it is
@@ -81,10 +83,14 @@ impl McpProcess {
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "debug");
 
+        let mut impl_official = false;
         for (k, v) in env_overrides {
             match v {
                 Some(val) => {
                     cmd.env(k, val);
+                    if *k == "CODEX_MCP_IMPL" && val.eq_ignore_ascii_case("official") {
+                        impl_official = true;
+                    }
                 }
                 None => {
                     cmd.env_remove(k);
@@ -121,6 +127,7 @@ impl McpProcess {
             process,
             stdin,
             stdout,
+            impl_official,
         })
     }
 
@@ -162,27 +169,54 @@ impl McpProcess {
             os_info.architecture().unwrap_or("unknown"),
             codex_core::terminal::user_agent()
         );
-        assert_eq!(
-            JSONRPCMessage::Response(JSONRPCResponse {
-                jsonrpc: JSONRPC_VERSION.into(),
-                id: RequestId::Integer(request_id),
-                result: json!({
-                    "capabilities": {
-                        "tools": {
-                            "listChanged": true
+        if self.impl_official {
+            // Reduced invariant checks for official path.
+            let JSONRPCMessage::Response(JSONRPCResponse { id, result, .. }) = &initialized else {
+                anyhow::bail!("expected Response for initialize, got: {initialized:?}");
+            };
+            anyhow::ensure!(
+                *id == RequestId::Integer(request_id),
+                "initialize id mismatch"
+            );
+            let protocol = result
+                .get("protocolVersion")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            anyhow::ensure!(
+                protocol == mcp_types::MCP_SCHEMA_VERSION,
+                "protocolVersion mismatch: {}",
+                protocol
+            );
+            let list_changed = result
+                .get("capabilities")
+                .and_then(|v| v.get("tools"))
+                .and_then(|v| v.get("listChanged"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            anyhow::ensure!(list_changed, "tools.listChanged should be true");
+        } else {
+            assert_eq!(
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    jsonrpc: JSONRPC_VERSION.into(),
+                    id: RequestId::Integer(request_id),
+                    result: json!({
+                        "capabilities": {
+                            "tools": {
+                                "listChanged": true
+                            },
                         },
-                    },
-                    "serverInfo": {
-                        "name": "codex-mcp-server",
-                        "title": "Codex",
-                        "version": "0.0.0",
-                        "user_agent": user_agent
-                    },
-                    "protocolVersion": mcp_types::MCP_SCHEMA_VERSION
-                })
-            }),
-            initialized
-        );
+                        "serverInfo": {
+                            "name": "codex-mcp-server",
+                            "title": "Codex",
+                            "version": "0.0.0",
+                            "user_agent": user_agent
+                        },
+                        "protocolVersion": mcp_types::MCP_SCHEMA_VERSION
+                    })
+                }),
+                initialized
+            );
+        }
 
         // Send notifications/initialized to ack the response.
         self.send_jsonrpc_message(JSONRPCMessage::Notification(JSONRPCNotification {
@@ -256,6 +290,12 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("removeConversationListener", params)
+            .await
+    }
+
+    /// Send a `tools/list` request.
+    pub async fn send_tools_list_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request(mcp_types::ListToolsRequest::METHOD, None)
             .await
     }
 
@@ -535,6 +575,57 @@ impl McpProcess {
                 }
                 JSONRPCMessage::Response(_) => {
                     anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
+                }
+            }
+        }
+    }
+
+    /// Reads notifications until an official-path task_complete event is observed:
+    /// Method "notifications/message" with params.logger == "codex/event" and
+    /// params.data.msg.type == "task_complete".
+    pub async fn read_stream_until_official_task_complete_notification(
+        &mut self,
+    ) -> anyhow::Result<JSONRPCNotification> {
+        eprintln!("in read_stream_until_official_task_complete_notification()");
+
+        loop {
+            let message = self.read_jsonrpc_message().await?;
+            match message {
+                JSONRPCMessage::Notification(notification) => {
+                    let is_match = if notification.method == "notifications/message" {
+                        if let Some(params) = &notification.params {
+                            let logger_ok = params.get("logger").and_then(|v| v.as_str())
+                                == Some("codex/event");
+                            let msg_type_ok = params
+                                .get("data")
+                                .and_then(|d| d.get("msg"))
+                                .and_then(|m| m.get("type"))
+                                .and_then(|t| t.as_str())
+                                == Some("task_complete");
+                            logger_ok && msg_type_ok
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if is_match {
+                        return Ok(notification);
+                    } else {
+                        eprintln!("ignoring notification: {notification:?}");
+                    }
+                }
+                JSONRPCMessage::Request(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
+                }
+                JSONRPCMessage::Error(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");
+                }
+                JSONRPCMessage::Response(_) => {
+                    anyhow::bail!(
+                        "task_complete notification: unexpected JSONRPCMessage::Response: {message:?}"
+                    );
                 }
             }
         }

@@ -4,72 +4,128 @@
 //! change. Internally, it uses rmcp transports.
 
 #![allow(dead_code)]
-#![allow(unused_imports)]
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
 use mcp_types::InitializeRequest;
 use mcp_types::InitializeRequestParams;
 use mcp_types::InitializedNotification;
-use mcp_types::JSONRPCMessage;
-use mcp_types::JSONRPCNotification;
-use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
 use mcp_types::ListToolsRequest;
 use mcp_types::ListToolsRequestParams;
 use mcp_types::ListToolsResult;
 use mcp_types::ModelContextProtocolNotification;
 use mcp_types::ModelContextProtocolRequest;
-use mcp_types::RequestId;
-use serde::de::DeserializeOwned;
+//
 use serde::Serialize;
+use serde::de::DeserializeOwned;
+use tokio::process::Command as TokioCommand;
 use tokio::time;
 
 // rmcp imports are present to document intended integration; avoid heavy
 // compile errors by not using them beyond type visibility here.
-#[allow(unused_imports)]
-use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
-#[allow(unused_imports)]
-use tokio::process::Command as TokioCommand;
+use rmcp::service::RoleClient;
+use rmcp::service::RunningService;
+use rmcp::service::ServiceExt;
+use rmcp::transport::ConfigureCommandExt;
+use rmcp::transport::TokioChildProcess;
 
-pub struct McpClient {
-    // Placeholder for future rmcp client handle
-    _marker: (),
+pub struct RmcpClient {
+    inner: RunningService<RoleClient, ()>,
 }
 
-impl McpClient {
+impl RmcpClient {
     pub async fn new_stdio_client(
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
     ) -> std::io::Result<Self> {
-        // For now, spawn nothing. When rmcp integration lands, this will use
-        // TokioChildProcess::new(TokioCommand::new(program).configure(|cmd| { ... }))
-        let _ = (program, args, env);
-        Ok(Self { _marker: () })
+        let merged_env = merge_base_env(env);
+        let transport = TokioChildProcess::new(TokioCommand::new(program).configure(|c| {
+            c.args(args)
+                .env_clear()
+                .envs(merged_env.clone())
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true);
+        }))?;
+        let inner = ().serve(transport).await.map_err(|e| {
+            std::io::Error::other(format!("rmcp client initialization failed: {e}"))
+        })?;
+        Ok(Self { inner })
     }
 
     pub async fn send_request<R>(
         &self,
         params: R::Params,
-        _timeout: Option<Duration>,
+        timeout: Option<Duration>,
     ) -> Result<R::Result>
     where
         R: ModelContextProtocolRequest,
         R::Params: Serialize,
         R::Result: DeserializeOwned,
     {
-        // Minimal stub to keep dual-path compile-time selectable without
-        // changing callers. Replace with rmcp request once wired.
-        let _ = serde_json::to_value(&params)?;
-        Err(anyhow!("rmcp path not yet wired: enable legacy or complete adapter"))
+        // Use generic request path when available from rmcp client.
+        // Fallback to mapping known methods.
+        let method = R::METHOD;
+        match method {
+            m if m == InitializeRequest::METHOD => {
+                let _ = serde_json::to_value(params)?; // touch param for type checking
+                // Already initialized in serve(); return stored info.
+                let res = self
+                    .inner
+                    .peer()
+                    .peer_info()
+                    .cloned()
+                    .ok_or_else(|| anyhow!("peer info not initialized"))?;
+                let v = serde_json::to_value(res)?;
+                let typed: R::Result = serde_json::from_value(v)?;
+                Ok(typed)
+            }
+            m if m == ListToolsRequest::METHOD => {
+                let p: Option<ListToolsRequestParams> =
+                    serde_json::from_value(serde_json::to_value(params)?)?;
+                let rmcp_params: Option<rmcp::model::PaginatedRequestParam> = match p {
+                    Some(pp) => Some(serde_json::from_value(serde_json::to_value(pp)?)?),
+                    None => None,
+                };
+                let fut = self.inner.list_tools(rmcp_params);
+                let res = match timeout {
+                    Some(d) => time::timeout(d, fut)
+                        .await
+                        .map_err(|_| anyhow!("request timed out"))??,
+                    None => fut.await?,
+                };
+                let v = serde_json::to_value(res)?;
+                let typed: R::Result = serde_json::from_value(v)?;
+                Ok(typed)
+            }
+            m if m == CallToolRequest::METHOD => {
+                let p: CallToolRequestParams =
+                    serde_json::from_value(serde_json::to_value(params)?)?;
+                let args_obj = p.arguments.and_then(|v| v.as_object().cloned());
+                let fut = self.inner.call_tool(rmcp::model::CallToolRequestParam {
+                    name: p.name.into(),
+                    arguments: args_obj,
+                });
+                let res = match timeout {
+                    Some(d) => time::timeout(d, fut)
+                        .await
+                        .map_err(|_| anyhow!("request timed out"))??,
+                    None => fut.await?,
+                };
+                let v = serde_json::to_value(res)?;
+                let typed: R::Result = serde_json::from_value(v)?;
+                Ok(typed)
+            }
+            other => Err(anyhow!(format!("unsupported rmcp request method: {other}"))),
+        }
     }
 
     pub async fn send_notification<N>(&self, params: N::Params) -> Result<()>
@@ -77,18 +133,44 @@ impl McpClient {
         N: ModelContextProtocolNotification,
         N::Params: Serialize,
     {
-        let _ = serde_json::to_value(&params)?;
-        Ok(())
+        let method = N::METHOD;
+        if method == InitializedNotification::METHOD {
+            // SDK provides a notification helper without params.
+            let _ = serde_json::to_value(&params)?;
+            self.inner
+                .notify_initialized()
+                .await
+                .map_err(|e| anyhow!(format!("notify_initialized failed: {e}")))?;
+            Ok(())
+        } else {
+            // No-op for other notifications (not used yet).
+            Ok(())
+        }
     }
 
     pub async fn initialize(
         &self,
-        initialize_params: InitializeRequestParams,
+        _initialize_params: InitializeRequestParams,
         initialize_notification_params: Option<serde_json::Value>,
-        timeout: Option<Duration>,
+        _timeout: Option<Duration>,
     ) -> Result<mcp_types::InitializeResult> {
-        let _ = (initialize_params, initialize_notification_params, timeout);
-        Err(anyhow!("rmcp path not yet wired: enable legacy or complete adapter"))
+        // The official SDK completes initialization during `serve()`. Return
+        // the stored peer info and send the optional notification for parity.
+        let response: rmcp::model::InitializeResult = self
+            .inner
+            .peer()
+            .peer_info()
+            .cloned()
+            .ok_or_else(|| anyhow!("peer info not initialized"))?;
+        if initialize_notification_params.is_some() {
+            self.inner
+                .notify_initialized()
+                .await
+                .map_err(|e| anyhow!(format!("notify_initialized failed: {e}")))?;
+        }
+        let v = serde_json::to_value(response)?;
+        let typed: mcp_types::InitializeResult = serde_json::from_value(v)?;
+        Ok(typed)
     }
 
     pub async fn list_tools(
@@ -96,7 +178,23 @@ impl McpClient {
         _params: Option<ListToolsRequestParams>,
         _timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
-        Err(anyhow!("rmcp path not yet wired: enable legacy or complete adapter"))
+        // Convert mcp_types::ListToolsRequestParams -> rmcp::model::PaginatedRequestParam
+        // via serde for compatibility.
+        let rmcp_params: Option<rmcp::model::PaginatedRequestParam> = match _params {
+            Some(p) => Some(serde_json::from_value(serde_json::to_value(p)?)?),
+            None => None,
+        };
+        let fut = self.inner.list_tools(rmcp_params);
+        let res = match _timeout {
+            Some(d) => time::timeout(d, fut)
+                .await
+                .map_err(|_| anyhow!("request timed out"))??,
+            None => fut.await?,
+        };
+        // Convert rmcp -> mcp_types via serde
+        let v = serde_json::to_value(res)?;
+        let typed: mcp_types::ListToolsResult = serde_json::from_value(v)?;
+        Ok(typed)
     }
 
     pub async fn call_tool(
@@ -105,7 +203,52 @@ impl McpClient {
         _arguments: Option<serde_json::Value>,
         _timeout: Option<Duration>,
     ) -> Result<mcp_types::CallToolResult> {
-        Err(anyhow!("rmcp path not yet wired: enable legacy or complete adapter"))
+        // rmcp expects arguments as Option<Map<String, Value>>
+        let args_obj = _arguments.and_then(|v| v.as_object().cloned());
+        let fut = self.inner.call_tool(rmcp::model::CallToolRequestParam {
+            name: _name.into(),
+            arguments: args_obj,
+        });
+        let res = match _timeout {
+            Some(d) => time::timeout(d, fut)
+                .await
+                .map_err(|_| anyhow!("request timed out"))??,
+            None => fut.await?,
+        };
+        let v = serde_json::to_value(res)?;
+        let typed: mcp_types::CallToolResult = serde_json::from_value(v)?;
+        Ok(typed)
     }
 }
 
+fn merge_base_env(extra: Option<HashMap<String, String>>) -> HashMap<String, String> {
+    // Minimal baseline env forwarding to keep child functional (arg0, PATH, temp, etc.).
+    #[cfg(windows)]
+    let keys = [
+        "PATH",
+        "PATHEXT",
+        "COMSPEC",
+        "SYSTEMROOT",
+        "WINDIR",
+        "USERNAME",
+        "USERDOMAIN",
+        "USERPROFILE",
+        "TEMP",
+        "TMP",
+    ];
+    #[cfg(not(windows))]
+    let keys = [
+        "HOME", "LOGNAME", "PATH", "SHELL", "USER", "TMPDIR", "LANG", "LC_ALL", "TERM",
+    ];
+
+    let mut map: HashMap<String, String> = keys
+        .iter()
+        .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+        .collect();
+    if let Some(extra) = extra {
+        for (k, v) in extra {
+            map.insert(k, v);
+        }
+    }
+    map
+}

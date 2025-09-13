@@ -13,7 +13,13 @@ use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_logout;
 use codex_cli::proto;
 use codex_common::CliConfigOverrides;
+use codex_common::McpImpl;
+use codex_common::McpImplArg;
+use codex_core::config::ConfigToml;
+use codex_core::config::find_codex_home;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_exec::Cli as ExecCli;
+use codex_mcp_client::set_client_impl_override;
 use codex_tui::Cli as TuiCli;
 use std::path::PathBuf;
 
@@ -39,6 +45,13 @@ struct MultitoolCli {
 
     #[clap(flatten)]
     interactive: TuiCli,
+
+    #[clap(flatten)]
+    mcp_impl: McpImplArg,
+
+    /// Select MCP client implementation (legacy|official). Defaults to legacy.
+    #[clap(long = "mcp-client-impl", value_enum)]
+    mcp_client_impl: Option<McpImpl>,
 
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
@@ -145,6 +158,41 @@ fn main() -> anyhow::Result<()> {
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let cli = MultitoolCli::parse();
 
+    // Load config.toml early to derive defaults for server/client impl when
+    // neither CLI nor env override is provided.
+    let cfg_toml: Option<ConfigToml> = find_codex_home()
+        .ok()
+        .and_then(|home| load_config_as_toml_with_cli_overrides(&home, vec![]).ok());
+
+    // Server impl selection: env/CLI take precedence, else config default.
+    let mut selected_impl: McpImpl = cli.mcp_impl.selected_or_default();
+    if std::env::var("CODEX_MCP_IMPL").is_err()
+        && cli.mcp_impl.mcp_impl.is_none()
+        && cfg_toml
+            .as_ref()
+            .and_then(|c| c.mcp_impl.clone())
+            .as_deref()
+            .is_some_and(|v| v.eq_ignore_ascii_case("official"))
+    {
+        selected_impl = McpImpl::Official;
+    }
+    tracing::info!("MCP implementation selected: {}", selected_impl.as_str());
+
+    // Plumb client selection via env var so core/client can pick it up at runtime.
+    // Client impl selection: if CLI flag set, override; else use config if present.
+    if let Some(client_impl) = cli.mcp_client_impl {
+        set_client_impl_override(client_impl.as_str());
+        tracing::info!(
+            "MCP client implementation selected: {}",
+            client_impl.as_str()
+        );
+    } else if let Some(cfg) = cfg_toml.as_ref()
+        && let Some(v) = cfg.mcp_client_impl.as_deref()
+    {
+        set_client_impl_override(v);
+        tracing::info!("MCP client implementation selected (config): {}", v);
+    }
+
     match cli.subcommand {
         None => {
             let mut tui_cli = cli.interactive;
@@ -159,7 +207,12 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Mcp) => {
-            codex_mcp_server::run_main(codex_linux_sandbox_exe, cli.config_overrides).await?;
+            codex_mcp_server::run_main_with_impl(
+                codex_linux_sandbox_exe,
+                cli.config_overrides,
+                selected_impl,
+            )
+            .await?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);

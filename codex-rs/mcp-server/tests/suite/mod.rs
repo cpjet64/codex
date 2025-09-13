@@ -8,6 +8,7 @@ mod create_conversation;
 mod interrupt;
 mod list_resume;
 mod login;
+mod parity;
 mod send_message;
 mod user_agent;
 mod user_info;

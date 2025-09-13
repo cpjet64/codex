@@ -17,10 +17,10 @@ Commands (examples; adapt to CI matrix):
   - `cargo deny check`
 
 - Baselines and comparisons:
-  - Record baseline (legacy path):
-    - `CODEx_MCP_IMPL=legacy cargo run -p codex-cli -- measure-mcp` → writes `ci/baseline.json`
-  - Measure SDK path:
-    - `CODEx_MCP_IMPL=rmcp cargo run -p codex-cli -- measure-mcp` → writes `ci/sdk.json`
+- Record baseline (legacy path):
+  - `CODEX_MCP_IMPL=legacy cargo run -p codex-cli -- measure-mcp` → writes `ci/baseline.json`
+  - Measure SDK path (official implementation):
+  - `CODEX_MCP_IMPL=official cargo run -p codex-cli -- measure-mcp` → writes `ci/sdk.json`
   - Compare (fail on regression):
     - `scripts/ci/compare-mcp-metrics.py --baseline ci/baseline.json --candidate ci/sdk.json --max-delta 0.05`
 

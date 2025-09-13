@@ -220,6 +220,51 @@ Users can specify config values at multiple levels. Order of precedence is as fo
 3. as an entry in `config.toml`, e.g., `model = "o3"`
 4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `gpt-5`)
 
+## MCP implementation (client/server)
+
+Codex supports two MCP implementations for both the built‑in MCP server (`codex mcp`) and the embedded MCP client (used when Codex connects to external MCP servers via `config.toml`). Defaults remain on the legacy implementation.
+
+Config keys (recommended defaults in `config.toml`):
+
+```toml
+# Server implementation for `codex mcp`: "legacy" (default) or "official"
+mcp_impl = "legacy"
+
+# Client implementation when connecting to external MCP servers: "legacy" (default) or "official"
+mcp_client_impl = "legacy"
+```
+
+CLI flags (highest precedence):
+
+- Server: `--mcp-impl legacy|official` (e.g., `codex --mcp-impl=official mcp`)
+- Client: `--mcp-client-impl legacy|official` (e.g., `codex --mcp-client-impl=official`)
+
+Environment variables:
+
+- Server: `CODEX_MCP_IMPL=legacy|official`
+- Client: `CODEX_MCP_CLIENT_IMPL=legacy|official`
+
+Precedence:
+
+- Server: CLI flag > `CODEX_MCP_IMPL` > `mcp_impl` in config > legacy
+- Client: CLI flag > `CODEX_MCP_CLIENT_IMPL` (or process override) > `mcp_client_impl` in config > legacy
+
+### Migration note: Official MCP approvals
+
+When `mcp_impl = "official"` (or `--mcp-impl=official`), the server forwards approval prompts via the RMCP SDK’s typed elicitation API:
+
+- Requests use `elicitation/create` with standard fields (`message`, `requestedSchema`). Codex‑specific correlators are preserved under `params._meta` (for example: `codex_elicitation`, `codex_mcp_tool_call_id`, `codex_event_id`, `codex_call_id`, etc.).
+- Clients must respond with the typed result shape, for example `{ "action": "accept" }` (or `"decline"`, `"cancel"`). The server maps this to Codex’s legacy decision internally so existing flows continue to work.
+
+Legacy differences for reference:
+
+- Approval requests previously placed Codex fields at the top level of `params` and tests commonly replied with `{ "decision": "approved" }`.
+
+CI recommendation during transition:
+
+- Run the test suite twice (legacy and official) to maintain parity, e.g. matrix env jobs with `CODEX_MCP_IMPL=legacy` and `CODEX_MCP_IMPL=official` (and likewise for `CODEX_MCP_CLIENT_IMPL`).
+- Keep legacy as default initially; flip to official after a cycle of green CI and internal dogfood. Retain the rollback switch for 1–2 releases before removing legacy.
+
 ## model_reasoning_effort
 
 If the selected model is known to support reasoning (for example: `o3`, `o4-mini`, `codex-*`, `gpt-5`), reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning), this can be set to:
@@ -320,6 +365,49 @@ sandbox_mode = "danger-full-access"
 This is reasonable to use if Codex is running in an environment that provides its own sandboxing (such as a Docker container) such that further sandboxing is unnecessary.
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
+
+## MCP implementation (client/server)
+
+Codex supports two MCP implementations and lets you choose independently for:
+
+- Server: when running `codex mcp` (Codex acting as an MCP server).
+- Client: when Codex connects to configured external MCP servers (`mcp_servers`).
+
+Valid values are `"legacy"` (default) and `"official"`.
+
+Persist defaults in `~/.codex/config.toml`:
+
+```toml
+# Server implementation default for `codex mcp`
+#   values: "legacy" (default), "official"
+mcp_impl = "legacy"
+
+# Client implementation default when Codex connects to external MCP servers
+#   values: "legacy" (default), "official"
+mcp_client_impl = "legacy"
+```
+
+Override via CLI (highest precedence):
+
+- Server (when running `codex mcp`):
+  - `codex --mcp-impl=official mcp`
+- Client (when connecting to configured servers):
+  - `codex --mcp-client-impl=official`
+
+Environment variables (fallback if no flag is provided):
+
+- Server: `CODEX_MCP_IMPL=legacy|official`
+- Client: `CODEX_MCP_CLIENT_IMPL=legacy|official`
+
+Precedence:
+
+- Server: CLI flag > `CODEX_MCP_IMPL` > `mcp_impl` in config > legacy
+- Client: CLI flag > `CODEX_MCP_CLIENT_IMPL` (or process override) > `mcp_client_impl` in config > legacy
+
+Notes:
+
+- Server and client selections are independent. You may run the Codex MCP server with the official SDK while still using the legacy client, or vice versa.
+- These switches act as a safe roll‑back lever; defaults remain on legacy until you opt in.
 
 ## Approval presets
 
@@ -613,3 +701,5 @@ Options that are specific to the TUI.
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
 | `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: false). |
+| `mcp_impl` | `legacy` \| `official` | Default MCP server implementation for `codex mcp`. |
+| `mcp_client_impl` | `legacy` \| `official` | Default MCP client implementation when connecting to external servers. |

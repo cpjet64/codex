@@ -13,6 +13,14 @@ mod sandbox_mode_cli_arg;
 #[cfg(feature = "cli")]
 pub use sandbox_mode_cli_arg::SandboxModeCliArg;
 
+#[cfg(feature = "cli")]
+mod mcp_impl_cli_arg;
+
+#[cfg(feature = "cli")]
+pub use mcp_impl_cli_arg::McpImpl;
+#[cfg(feature = "cli")]
+pub use mcp_impl_cli_arg::McpImplArg;
+
 #[cfg(any(feature = "cli", test))]
 mod config_override;
 

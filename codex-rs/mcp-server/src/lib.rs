@@ -6,6 +6,7 @@ use std::io::Result as IoResult;
 use std::path::PathBuf;
 
 use codex_common::CliConfigOverrides;
+use codex_common::McpImpl;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 
@@ -54,6 +55,20 @@ pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
 ) -> IoResult<()> {
+    // Backward-compat shim: default to Legacy until CLI plumbs selection in.
+    run_main_with_impl(
+        codex_linux_sandbox_exe,
+        cli_config_overrides,
+        McpImpl::Legacy,
+    )
+    .await
+}
+
+pub async fn run_main_with_impl(
+    codex_linux_sandbox_exe: Option<PathBuf>,
+    cli_config_overrides: CliConfigOverrides,
+    mcp_impl: McpImpl,
+) -> IoResult<()> {
     // Install a simple subscriber so `tracing` output is visible.  Users can
     // control the log level with `RUST_LOG`.
     tracing_subscriber::fmt()
@@ -61,7 +76,41 @@ pub async fn run_main(
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    // Set up channels.
+    // Allow environment variable to override selection to simplify integration testing.
+    let effective_impl = match std::env::var("CODEX_MCP_IMPL") {
+        Ok(v) if v.eq_ignore_ascii_case("official") => McpImpl::Official,
+        _ => mcp_impl,
+    };
+    tracing::info!(
+        "codex-mcp-server starting with impl: {}",
+        effective_impl.as_str()
+    );
+
+    // If official path selected and enabled, delegate to rmcp server implementation.
+    #[cfg(feature = "rmcp_sdk")]
+    if matches!(effective_impl, McpImpl::Official) {
+        // Parse CLI overrides and config for parity with legacy path.
+        let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("error parsing -c overrides: {e}"),
+            )
+        })?;
+        let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
+            .map_err(|e| {
+                std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
+            })?;
+
+        tracing::info!("starting rmcp (official) server on stdio");
+        return crate::rmcp_handlers::run_official_server(
+            codex_linux_sandbox_exe,
+            std::sync::Arc::new(config),
+        )
+        .await
+        .map_err(|e| std::io::Error::other(format!("rmcp server error: {e}")));
+    }
+
+    // Set up channels (legacy path).
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
 

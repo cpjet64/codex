@@ -3,6 +3,22 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
+// pull in the cross-platform shell helper that returns a program + args
+#[path = "../common/shell.rs"]
+mod shell;
+use shell::Cmd;
+use shell::write_file_cmd;
+
+fn cmd_to_string(c: &Cmd) -> String {
+    let mut s = String::new();
+    s.push_str(&c.prog);
+    for a in &c.args {
+        s.push(' ');
+        s.push_str(a);
+    }
+    s
+}
+
 use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -55,20 +71,22 @@ async fn test_shell_command_approval_triggers_elicitation() {
 async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // Use a simple, untrusted command that creates a file so we can
     // observe a side-effect.
-    //
-    // Cross‑platform approach: run a tiny Python snippet to touch the file
-    // using `python3 -c ...` on all platforms.
     let workdir_for_shell_function_call = TempDir::new()?;
-    let created_filename = "created_by_shell_tool.txt";
-    let created_file = workdir_for_shell_function_call
-        .path()
-        .join(created_filename);
+    // Force deterministic shell behavior on Windows CI/machines is handled by
+    // the environment (CODEX_TEST_SHELL) set outside this test when needed.
 
-    let shell_command = vec![
-        "python3".to_string(),
-        "-c".to_string(),
-        format!("import pathlib; pathlib.Path('{created_filename}').touch()"),
-    ];
+    // Ask the agent to create a probe file via the helper-built command.
+    let probe = workdir_for_shell_function_call
+        .path()
+        .join("created_by_shell_tool.txt");
+    let cmd = write_file_cmd(&probe, "ok");
+    let prompt = format!("run `{}`", cmd_to_string(&cmd));
+    let shell_command: Vec<String> = {
+        let mut v = Vec::with_capacity(1 + cmd.args.len());
+        v.push(cmd.prog.clone());
+        v.extend(cmd.args.clone());
+        v
+    };
 
     let McpHandle {
         process: mut mcp_process,
@@ -90,7 +108,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // as an elicitation.
     let codex_request_id = mcp_process
         .send_codex_tool_call(CodexToolCallParam {
-            prompt: "run `git init`".to_string(),
+            prompt,
             ..Default::default()
         })
         .await?;
@@ -158,7 +176,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         codex_response
     );
 
-    assert!(created_file.is_file(), "created file should exist");
+    assert!(probe.is_file(), "created file should exist");
 
     Ok(())
 }
@@ -211,6 +229,9 @@ async fn test_patch_approval_triggers_elicitation() {
         panic!("failure: {err}");
     }
 }
+
+// Official-path elicitation tests are temporarily disabled until raw request
+// bridging preserves custom params under rmcp.
 
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     let cwd = TempDir::new()?;
@@ -433,6 +454,286 @@ async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle>
         server,
         dir: codex_home,
     })
+}
+
+async fn create_mcp_process_official(responses: Vec<String>) -> anyhow::Result<McpHandle> {
+    let server = create_mock_chat_completions_server(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    // Ensure proxies do not interfere with localhost mock server traffic.
+    // Explicitly clear common proxy variables in the child process env.
+    let mut mcp_process = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("CODEX_MCP_IMPL", Some("official")),
+            ("HTTP_PROXY", None),
+            ("http_proxy", None),
+            ("HTTPS_PROXY", None),
+            ("https_proxy", None),
+            ("ALL_PROXY", None),
+            ("all_proxy", None),
+            // Encourage direct connect to localhost
+            ("NO_PROXY", Some("127.0.0.1,localhost")),
+            ("no_proxy", Some("127.0.0.1,localhost")),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
+    Ok(McpHandle {
+        process: mcp_process,
+        server,
+        dir: codex_home,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_official_codex_tool_mocked_call_returns_final_message() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    // Keep the mock server and temp dir alive for the duration of the test.
+    // Dropping them early would cause WireMock to verify before any request is sent.
+    let McpHandle {
+        mut process,
+        server: _server,
+        dir: _dir,
+    } = create_mcp_process_official(vec![
+        create_final_assistant_message_sse_response("Hello from official!").expect("mock"),
+    ])
+    .await
+    .expect("spawn official mcp process");
+
+    let codex_request_id = process
+        .send_codex_tool_call(CodexToolCallParam {
+            prompt: "Say hello".to_string(),
+            ..Default::default()
+        })
+        .await
+        .expect("send codex tool call");
+
+    let codex_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+    )
+    .await
+    .expect("timeout waiting for codex response")
+    .expect("codex response");
+
+    let text = codex_response
+        .result
+        .get("content")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.get(0))
+        .and_then(|v| v.get("text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(text.contains("Hello from official!"));
+}
+
+/// Official-path: shell approval should elicit with raw Codex fields and accept response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_official_shell_and_patch_approvals_parity() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    // Create a probe file path and a simple untrusted command to write to it.
+    let workdir_for_shell_function_call = tempfile::TempDir::new().expect("tmpdir");
+    let probe = workdir_for_shell_function_call
+        .path()
+        .join("created_by_shell_tool.txt");
+    let cmd = write_file_cmd(&probe, "ok");
+    let prompt = format!("run `{}`", cmd_to_string(&cmd));
+    let shell_command: Vec<String> = {
+        let mut v = Vec::with_capacity(1 + cmd.args.len());
+        v.push(cmd.prog.clone());
+        v.extend(cmd.args.clone());
+        v
+    };
+
+    // Use official server path with mock responses: first, a shell call; then a final message.
+    let McpHandle {
+        mut process,
+        server: _server,
+        dir: _dir,
+    } = create_mcp_process_official(vec![
+        create_shell_sse_response(
+            shell_command.clone(),
+            Some(workdir_for_shell_function_call.path()),
+            Some(5_000),
+            "call1234",
+        )
+        .expect("mock shell sse"),
+        create_final_assistant_message_sse_response("File created!").expect("mock final message"),
+    ])
+    .await
+    .expect("spawn official mcp process");
+
+    // Trigger a codex tool call that will result in an elicitation.
+    let codex_request_id = process
+        .send_codex_tool_call(CodexToolCallParam {
+            prompt,
+            ..Default::default()
+        })
+        .await
+        .expect("send codex tool call");
+
+    // Read the elicitation/create request and assert Codex metadata fields are present.
+    let elicitation_request = tokio::time::timeout(
+        DEFAULT_READ_TIMEOUT,
+        process.read_stream_until_request_message(),
+    )
+    .await
+    .expect("timeout waiting for elicitation request")
+    .expect("elicitation request");
+    let elicitation_request_id = elicitation_request.id.clone();
+    let params_value = elicitation_request
+        .params
+        .clone()
+        .expect("elicitation_request.params must be set");
+    assert_eq!(elicitation_request.method, mcp_types::ElicitRequest::METHOD);
+    // Official path carries Codex fields under params._meta; verify presence.
+    let meta_obj = params_value
+        .get("_meta")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .expect("_meta object should be present");
+    let codex_elicitation = meta_obj
+        .get("codex_elicitation")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert_eq!(codex_elicitation, "exec-approval");
+    let codex_mcp_tool_call_id = meta_obj
+        .get("codex_mcp_tool_call_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(!codex_mcp_tool_call_id.is_empty());
+    let codex_event_id = meta_obj
+        .get("codex_event_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(!codex_event_id.is_empty());
+
+    // Approve the shell command: official path expects typed elicitation result.
+    process
+        .send_response(
+            elicitation_request_id.clone(),
+            serde_json::json!({ "action": "accept" }),
+        )
+        .await
+        .expect("send elicitation response");
+
+    // Expect a task_complete notification before tools/call completes (official path shape).
+    let _ = tokio::time::timeout(
+        DEFAULT_READ_TIMEOUT,
+        process.read_stream_until_official_task_complete_notification(),
+    )
+    .await
+    .expect("task_complete timeout")
+    .expect("task_complete notification");
+
+    // Verify the original codex tool call completes and that the file was created.
+    let codex_response = tokio::time::timeout(
+        DEFAULT_READ_TIMEOUT,
+        process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+    )
+    .await
+    .expect("timeout waiting for codex response")
+    .expect("codex response");
+    assert_eq!(
+        mcp_types::JSONRPCResponse {
+            jsonrpc: JSONRPC_VERSION.into(),
+            id: RequestId::Integer(codex_request_id),
+            result: json!({
+                "content": [
+                    { "text": "File created!", "type": "text" }
+                ]
+            }),
+        },
+        codex_response
+    );
+    assert!(probe.is_file(), "created file should exist");
+
+    // Now test patch approval on the same official server path.
+    let cwd = tempfile::TempDir::new().expect("tmpdir");
+    let test_file = cwd.path().join("destination_file.txt");
+    std::fs::write(&test_file, "original content\n").expect("write file");
+    let patch_content = format!(
+        "*** Begin Patch\n*** Update File: {}\n-original content\n+modified content\n*** End Patch",
+        test_file.as_path().to_string_lossy()
+    );
+
+    let McpHandle {
+        mut process,
+        server: _server2,
+        dir: _dir2,
+    } = create_mcp_process_official(vec![
+        create_apply_patch_sse_response(&patch_content, "call5678").expect("mock apply patch"),
+        create_final_assistant_message_sse_response("Patch has been applied successfully!")
+            .expect("mock final message"),
+    ])
+    .await
+    .expect("spawn official mcp process");
+
+    // Trigger a codex tool call that will result in a patch elicitation.
+    let codex_request_id = process
+        .send_codex_tool_call(CodexToolCallParam {
+            cwd: Some(cwd.path().to_string_lossy().to_string()),
+            prompt: "please modify the test file".to_string(),
+            ..Default::default()
+        })
+        .await
+        .expect("send codex tool call");
+
+    let elicitation_request = tokio::time::timeout(
+        DEFAULT_READ_TIMEOUT,
+        process.read_stream_until_request_message(),
+    )
+    .await
+    .expect("timeout waiting for patch elicitation")
+    .expect("elicitation request");
+    assert_eq!(elicitation_request.method, mcp_types::ElicitRequest::METHOD);
+    // Approve the patch using typed elicitation result.
+    process
+        .send_response(
+            elicitation_request.id.clone(),
+            serde_json::json!({ "action": "accept" }),
+        )
+        .await
+        .expect("send elicitation response");
+
+    // Verify tools/call completes and file content updated.
+    let codex_response = tokio::time::timeout(
+        DEFAULT_READ_TIMEOUT,
+        process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+    )
+    .await
+    .expect("timeout waiting for codex response")
+    .expect("codex response");
+    assert_eq!(
+        mcp_types::JSONRPCResponse {
+            jsonrpc: JSONRPC_VERSION.into(),
+            id: RequestId::Integer(codex_request_id),
+            result: json!({
+                "content": [
+                    {
+                        "text": "Patch has been applied successfully!",
+                        "type": "text"
+                    }
+                ]
+            }),
+        },
+        codex_response
+    );
+    let file_contents = std::fs::read_to_string(test_file.as_path()).expect("read file");
+    assert_eq!(file_contents, "modified content\n");
 }
 
 /// Create a Codex config that uses the mock server as the model provider.

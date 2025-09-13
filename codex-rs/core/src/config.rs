@@ -497,6 +497,14 @@ pub struct ConfigToml {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
+
+    /// Default server MCP implementation ("legacy"|"official"). Optional.
+    #[serde(default)]
+    pub mcp_impl: Option<String>,
+
+    /// Default client MCP implementation ("legacy"|"official"). Optional.
+    #[serde(default)]
+    pub mcp_client_impl: Option<String>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {

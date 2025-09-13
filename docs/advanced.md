@@ -28,15 +28,72 @@ See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env
 
 ## Model Context Protocol (MCP)
 
-The Codex CLI can be configured to leverage MCP servers by defining an [`mcp_servers`](./config.md#mcp_servers) section in `~/.codex/config.toml`. It is intended to mirror how tools such as Claude and Cursor define `mcpServers` in their respective JSON config files, though the Codex format is slightly different since it uses TOML rather than JSON, e.g.:
+Codex supports MCP both as a client (connecting to external servers) and as a server (exposing Codex via MCP). This section covers usage, flags, and examples.
+
+### Use external MCP servers (client)
+
+Configure servers with [`mcp_servers`](./config.md#mcp_servers) in `~/.codex/config.toml`. This mirrors `mcpServers` in other tools, but uses TOML:
 
 ```toml
 # IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
-[mcp_servers.server-name]
+[mcp_servers.example]
 command = "npx"
-args = ["-y", "mcp-server"]
-env = { "API_KEY" = "value" }
+args = ["-y", "my-mcp-server"]
+env = { API_KEY = "value" }
+# Optional startup timeout for initialize + initial tools/list (default: 10_000 ms)
+startup_timeout_ms = 15000
 ```
 
-> [!TIP]
-> It is somewhat experimental, but the Codex CLI can also be run as an MCP _server_ via `codex mcp`. If you launch it with an MCP client such as `npx @modelcontextprotocol/inspector codex mcp` and send it a `tools/list` request, you will see that there is only one tool, `codex`, that accepts a grab-bag of inputs, including a catch-all `config` map for anything you might want to override. Feel free to play around with it and provide feedback via GitHub issues. 
+Run Codex and it will connect to your configured servers on demand. Tools will be qualified as `<server>__<tool>` in the UI.
+
+Client implementation selection (optional):
+
+- CLI: `codex --mcp-client-impl=official`
+- Env: `CODEX_MCP_CLIENT_IMPL=official`
+- Config: `mcp_client_impl = "official"`
+
+Precedence: CLI > env > config > legacy.
+
+Note: Only stdio servers are supported directly. For SSE transports, consider an adapter such as `mcp-proxy`.
+
+### Run Codex as an MCP server
+
+You can launch Codex as an MCP server and connect an MCP client to it:
+
+```bash
+# Launch with default (legacy) server implementation
+codex mcp
+
+# Or select the official SDK implementation
+codex --mcp-impl=official mcp
+```
+
+Try it with the Inspector:
+
+```bash
+npx @modelcontextprotocol/inspector codex mcp
+```
+
+Server implementation selection (optional):
+
+- CLI: `codex --mcp-impl=official mcp`
+- Env: `CODEX_MCP_IMPL=official`
+- Config: `mcp_impl = "official"`
+
+Precedence: CLI > env > config > legacy.
+
+See the [MCP implementation switches](./config.md#mcp-implementation-clientserver) section for full details.
+
+### Legacy vs Official MCP
+
+- Legacy implementation
+  - Default path used by Codex today.
+  - Stable and well‑tested in the CLI.
+  - Recommended when you depend on current behavior or need maximal stability.
+
+- Official implementation
+  - Uses the Model Context Protocol’s official Rust SDK under the hood.
+  - Opt‑in via flags, env, or config.
+  - Recommended when evaluating SDK capabilities or if your external server expects newer protocol features supported by the SDK.
+
+You can choose independently for the client and server roles. Use this to migrate safely (e.g., try the official server while keeping the client legacy).

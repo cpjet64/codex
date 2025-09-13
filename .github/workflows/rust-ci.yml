@@ -185,21 +185,33 @@ jobs:
           tool: nextest
           version: 0.9.103
 
-      - name: tests
-        id: test
-        # Tests take too long for release builds to run them on every PR.
+      - name: tests (legacy impl)
+        id: test_legacy
         if: ${{ matrix.profile != 'release' }}
         continue-on-error: true
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }}
         env:
           RUST_BACKTRACE: 1
+          CODEX_MCP_IMPL: legacy
+          CODEX_MCP_CLIENT_IMPL: legacy
+
+      - name: tests (official impl)
+        id: test_official
+        if: ${{ matrix.profile != 'release' }}
+        continue-on-error: true
+        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }}
+        env:
+          RUST_BACKTRACE: 1
+          CODEX_MCP_IMPL: official
+          CODEX_MCP_CLIENT_IMPL: official
 
       # Fail the job if any of the previous steps failed.
       - name: verify all steps passed
         if: |
           steps.clippy.outcome == 'failure' ||
           steps.cargo_check_all_crates.outcome == 'failure' ||
-          steps.test.outcome == 'failure'
+          steps.test_legacy.outcome == 'failure' ||
+          steps.test_official.outcome == 'failure'
         run: |
           echo "One or more checks failed (clippy, cargo_check_all_crates, or test). See logs for details."
           exit 1
