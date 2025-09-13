@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -37,6 +38,23 @@ use rmcp::transport::TokioChildProcess;
 
 pub struct RmcpClient {
     inner: RunningService<RoleClient, ()>,
+    // Map sanitized tool names -> original tool names as advertised by the server.
+    // This lets us safely present sanitized names to callers while still calling
+    // the correct original name on the wire.
+    tool_name_map: Mutex<std::collections::HashMap<String, String>>,
+}
+
+/// Sanitize a tool name to a safe identifier: ^[a-zA-Z0-9_-]+$
+fn sanitize_tool_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 impl RmcpClient {
@@ -58,7 +76,10 @@ impl RmcpClient {
         let inner = ().serve(transport).await.map_err(|e| {
             std::io::Error::other(format!("rmcp client initialization failed: {e}"))
         })?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            tool_name_map: Mutex::new(std::collections::HashMap::new()),
+        })
     }
 
     pub async fn send_request<R>(
@@ -192,8 +213,42 @@ impl RmcpClient {
             None => fut.await?,
         };
         // Convert rmcp -> mcp_types via serde
+        // Convert rmcp -> mcp_types via serde first, then sanitize tool names
+        // for presentation while remembering the original names for call_tool.
         let v = serde_json::to_value(res)?;
-        let typed: mcp_types::ListToolsResult = serde_json::from_value(v)?;
+        let mut typed: mcp_types::ListToolsResult = serde_json::from_value(v)?;
+
+        // Build/refresh mapping: sanitized -> original, ensuring uniqueness.
+        let mut map = self.tool_name_map.lock().expect("tool_name_map poisoned");
+        map.clear();
+
+        // Track used sanitized names to avoid collisions.
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for tool in &mut typed.tools {
+            let original = tool.name.clone();
+            let mut sanitized = sanitize_tool_name(&original);
+            if sanitized.is_empty() {
+                sanitized = "_".to_string();
+            }
+            // Ensure uniqueness if two different originals collide after sanitization
+            if used.contains(&sanitized)
+                && map.get(&sanitized).map(|o| o != &original).unwrap_or(false)
+            {
+                let base = sanitized.clone();
+                let mut idx: usize = 2;
+                loop {
+                    let candidate = format!("{}_{}", base, idx);
+                    if !used.contains(&candidate) {
+                        sanitized = candidate;
+                        break;
+                    }
+                    idx += 1;
+                }
+            }
+            used.insert(sanitized.clone());
+            map.insert(sanitized.clone(), original);
+            tool.name = sanitized;
+        }
         Ok(typed)
     }
 
@@ -203,21 +258,50 @@ impl RmcpClient {
         _arguments: Option<serde_json::Value>,
         _timeout: Option<Duration>,
     ) -> Result<mcp_types::CallToolResult> {
+        // Translate sanitized name (if used) back to original before sending.
+        let (effective_name, fallback_name) = {
+            let map = self.tool_name_map.lock().expect("tool_name_map poisoned");
+            let mapped = map.get(&_name).cloned();
+            match mapped {
+                Some(orig) => (orig, _name.clone()),
+                None => (_name.clone(), _name.clone()),
+            }
+        };
+
         // rmcp expects arguments as Option<Map<String, Value>>
         let args_obj = _arguments.and_then(|v| v.as_object().cloned());
-        let fut = self.inner.call_tool(rmcp::model::CallToolRequestParam {
-            name: _name.into(),
-            arguments: args_obj,
-        });
-        let res = match _timeout {
-            Some(d) => time::timeout(d, fut)
-                .await
-                .map_err(|_| anyhow!("request timed out"))??,
-            None => fut.await?,
+        // First attempt: mapped original name (if present). On failure, fall back to the
+        // sanitized name we were given, to support servers that already sanitize their tools.
+        let attempt = |name: String| async {
+            let fut = self.inner.call_tool(rmcp::model::CallToolRequestParam {
+                name: name.into(),
+                arguments: args_obj.clone(),
+            });
+            let res = match _timeout {
+                Some(d) => time::timeout(d, fut)
+                    .await
+                    .map_err(|_| anyhow!("request timed out"))??,
+                None => fut.await?,
+            };
+            let v = serde_json::to_value(res)?;
+            let typed: mcp_types::CallToolResult = serde_json::from_value(v)?;
+            Ok::<mcp_types::CallToolResult, anyhow::Error>(typed)
         };
-        let v = serde_json::to_value(res)?;
-        let typed: mcp_types::CallToolResult = serde_json::from_value(v)?;
-        Ok(typed)
+
+        match attempt(effective_name.clone()).await {
+            Ok(ok) => Ok(ok),
+            Err(first_err) => {
+                if effective_name != fallback_name {
+                    attempt(fallback_name).await.map_err(|second_err| {
+                        anyhow!(format!(
+                            "first attempt failed: {first_err}; fallback failed: {second_err}"
+                        ))
+                    })
+                } else {
+                    Err(first_err)
+                }
+            }
+        }
     }
 }
 

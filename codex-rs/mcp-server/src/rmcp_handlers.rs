@@ -48,20 +48,45 @@ impl CodexRmcpService {
         }
     }
 
+    /// Sanitize a tool name to match ^[a-zA-Z0-9_-]+$
+    ///
+    /// This is applied only on the official RMCP path when constructing
+    /// `rmcp::model::Tool` objects for `tools/list`.
+    fn sanitize_tool_name(name: &str) -> String {
+        name.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    }
+
     fn legacy_tools_as_rmcp() -> Vec<Tool> {
         let mut tools = Vec::new();
-        // Convert existing mcp_types::Tool definitions to rmcp::model::Tool via serde.
+        // Convert existing mcp_types::Tool definitions to rmcp::model::Tool via serde,
+        // applying name sanitization for the official path.
         let legacy_codex = crate::codex_tool_config::create_tool_for_codex_tool_call_param();
-        if let Ok(v) = serde_json::to_value(&legacy_codex)
-            && let Ok(tool) = serde_json::from_value::<Tool>(v)
-        {
-            tools.push(tool);
+        if let Ok(mut v) = serde_json::to_value(&legacy_codex) {
+            if let Some(name_str) = v.get("name").and_then(|s| s.as_str()) {
+                let sanitized = Self::sanitize_tool_name(name_str);
+                v["name"] = serde_json::Value::String(sanitized);
+            }
+            if let Ok(tool) = serde_json::from_value::<Tool>(v) {
+                tools.push(tool);
+            }
         }
         let legacy_reply = crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param();
-        if let Ok(v) = serde_json::to_value(&legacy_reply)
-            && let Ok(tool) = serde_json::from_value::<Tool>(v)
-        {
-            tools.push(tool);
+        if let Ok(mut v) = serde_json::to_value(&legacy_reply) {
+            if let Some(name_str) = v.get("name").and_then(|s| s.as_str()) {
+                let sanitized = Self::sanitize_tool_name(name_str);
+                v["name"] = serde_json::Value::String(sanitized);
+            }
+            if let Ok(tool) = serde_json::from_value::<Tool>(v) {
+                tools.push(tool);
+            }
         }
         tools
     }

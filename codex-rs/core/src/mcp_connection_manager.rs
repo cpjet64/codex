@@ -301,9 +301,22 @@ async fn list_all_tools(clients: &HashMap<String, ManagedClient>) -> Result<Vec<
         };
 
         for tool in list_result.tools {
+            // Sanitize tool names to conform to OpenAI's pattern ^[a-zA-Z0-9_-]+$
+            // so we never send invalid tool names to the API. Keep the
+            // sanitized name in both the ToolInfo.tool_name and Tool.name that
+            // we expose to the caller.
+            let mut tool = tool;
+            let original = tool.name.clone();
+            let mut sanitized = sanitize_tool_name(&original);
+            if sanitized.is_empty() {
+                sanitized = "_".to_string();
+            }
+            // Apply sanitized name to the tool we return
+            tool.name = sanitized.clone();
+
             let tool_info = ToolInfo {
                 server_name: server_name.clone(),
-                tool_name: tool.name.clone(),
+                tool_name: sanitized,
                 tool,
             };
             aggregated.push(tool_info);
@@ -324,6 +337,18 @@ fn is_valid_mcp_server_name(server_name: &str) -> bool {
         && server_name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn sanitize_tool_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

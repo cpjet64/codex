@@ -84,16 +84,29 @@ impl McpProcess {
         cmd.env("RUST_LOG", "debug");
 
         let mut impl_official = false;
+        let mut has_impl_override = false;
         for (k, v) in env_overrides {
             match v {
                 Some(val) => {
                     cmd.env(k, val);
-                    if *k == "CODEX_MCP_IMPL" && val.eq_ignore_ascii_case("official") {
-                        impl_official = true;
+                    if *k == "CODEX_MCP_IMPL" {
+                        has_impl_override = true;
+                        if val.eq_ignore_ascii_case("official") {
+                            impl_official = true;
+                        }
                     }
                 }
                 None => {
                     cmd.env_remove(k);
+                }
+            }
+        }
+
+        // If no explicit override was provided, infer from current environment.
+        if !has_impl_override {
+            if let Ok(v) = std::env::var("CODEX_MCP_IMPL") {
+                if v.eq_ignore_ascii_case("official") {
+                    impl_official = true;
                 }
             }
         }
