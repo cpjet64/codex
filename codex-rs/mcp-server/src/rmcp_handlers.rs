@@ -446,13 +446,17 @@ impl Service<RoleServer> for CodexRmcpService {
                             });
                         }
                         Some(OutgoingMessage::Notification(note)) => {
-                            // Map Codex notification to rmcp logging message
+                            // Map Codex notification to rmcp logging message.
+                            let mut logger = note.method.clone();
+                            if logger == "progress/update" {
+                                logger = "progress".to_string();
+                            }
                             let data = note.params.unwrap_or_else(|| json!({}));
                             let _ = peer
                                 .notify_logging_message(
                                     rmcp::model::LoggingMessageNotificationParam {
                                         level: rmcp::model::LoggingLevel::Info,
-                                        logger: Some(note.method),
+                                        logger: Some(logger),
                                         data,
                                     },
                                 )
