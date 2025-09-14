@@ -17,10 +17,13 @@ Task 02: CLI toggle and precedence
 ----------------------------------
 - [x] Keep --mcp‑client‑impl and --mcp‑server‑impl
 - [ ] Add --mcp‑client‑url for HTTP client
+- [x] Add --mcp‑client‑url for HTTP client
 - [ ] Add --mcp‑client‑sse for SSE client
+- [x] Add --mcp‑client‑sse for SSE client
 - [ ] Add --mcp‑server‑http and --mcp‑path
 - [x] Compute effective impl once in CLI
 - [ ] Compute effective transport once in CLI
+- [x] Compute effective transport once in CLI
 - [x] Remove env overrides in lower layers
 - [ ] Add unit tests for precedence logic
 - [ ] Update help text and README flags

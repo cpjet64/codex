@@ -53,6 +53,14 @@ struct MultitoolCli {
     #[clap(long = "mcp-client-impl", value_enum)]
     mcp_client_impl: Option<McpImpl>,
 
+    /// SDK client transport URL for HTTP transport.
+    #[clap(long = "mcp-client-url", value_name = "URL")]
+    mcp_client_url: Option<String>,
+
+    /// Use SSE compatibility transport for SDK client.
+    #[clap(long = "mcp-client-sse")]
+    mcp_client_sse: bool,
+
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
 }
@@ -157,6 +165,18 @@ fn main() -> anyhow::Result<()> {
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let cli = MultitoolCli::parse();
+    // Compute SDK client transport once from CLI.
+    let selected_transport = if cli.mcp_client_sse {
+        "sse"
+    } else if cli.mcp_client_url.is_some() {
+        "http"
+    } else {
+        "stdio"
+    };
+    tracing::info!(
+        "MCP client transport selected: {}",
+        selected_transport
+    );
 
     // Load config.toml early to derive defaults for server/client impl when
     // neither CLI nor env override is provided.
