@@ -12,6 +12,14 @@ pub struct SdkClient;
 
 impl SdkClient {
     pub fn new_placeholder() -> Self { Self }
+
+    pub async fn new_stdio_child(
+        _program: std::ffi::OsString,
+        _args: Vec<std::ffi::OsString>,
+        _env: Option<std::collections::HashMap<String, String>>,
+    ) -> std::io::Result<Self> {
+        Err(std::io::Error::other("sdk stdio transport not implemented"))
+    }
 }
 
 impl IfaceClient for SdkClient {
