@@ -65,3 +65,14 @@ impl IfaceClient for SdkClient {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::SdkClient;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn name_is_sdk() {
+        let c = SdkClient::new_placeholder();
+        assert_eq!(c.as_name(), "sdk");
+    }
+}

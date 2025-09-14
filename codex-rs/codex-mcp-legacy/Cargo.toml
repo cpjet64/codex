@@ -10,6 +10,8 @@ workspace = true
 anyhow = "1"
 codex-mcp-types = { path = "../codex-mcp-types" }
 
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+
 [features]
 default = []
-

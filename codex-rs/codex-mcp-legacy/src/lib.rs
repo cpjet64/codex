@@ -65,3 +65,14 @@ impl IfaceClient for LegacyClient {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::LegacyClient;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn name_is_legacy() {
+        let c = LegacyClient::new_placeholder();
+        assert_eq!(c.as_name(), "legacy");
+    }
+}
