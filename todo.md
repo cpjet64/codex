@@ -8,7 +8,7 @@ Task 01: Membrane and traits
 - [x] Create iface module with McpServer trait
 - [x] Add codex-common crate for shared helpers
 - [x] Move sanitizer into codex-common
-- [ ] Ensure no rmcp imports outside SDK adapter
+- [x] Ensure no rmcp imports outside SDK adapter
 - [ ] Ensure no legacy JSON types leak to core
 - [ ] Build passes; no API changes to core
 
@@ -159,6 +159,8 @@ Notes
 -----
 - Use only allowed MCP tools. No PRs or issues.
 - Update checkboxes as you progress.
+- Progress: removed direct rmcp imports from server; now uses
+  codex-mcp-sdk rmcp reexports.
 - Progress: added HTTP cancel + timeout tests; added stdio progress test;
   mapped progress/update to logger=progress; emitted start/end markers.
 - Progress: documented cargo features (SDK, server) and switched rmcp
