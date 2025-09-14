@@ -49,8 +49,21 @@ settings as the interactive CLI.
   tool call. Over HTTP, forwarded as `logging/message` with
   `logger = "progress"`.
 - Cancel: SDK client exposes `cancel()` which forwards to server.
-- Capabilities: server advertises `tools.listChanged = true`.
 - HTTP: adds `Mcp-Session-Id` header on successful responses.
+
+Capability summary
+
+- Tools: `tools.listChanged = true`
+- Progress: `start/end` markers
+- Cancel: supported via SDK
+- HTTP: `Mcp-Session-Id` header
+
+Server HTTP bind
+
+- Bind address is configured by `CODEX_MCP_SERVER_HTTP_BIND`, e.g.:
+  `CODEX_MCP_SERVER_HTTP_BIND=127.0.0.1:18123`
+- Default is loopback for safety. Non-loopback binds are warned.
+- Stop the server with `Ctrl+C`.
 
 #### Run SDK tests locally
 
