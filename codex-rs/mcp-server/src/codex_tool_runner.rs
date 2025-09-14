@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::OutgoingNotification;
 use crate::outgoing_message::OutgoingNotificationMeta;
+use crate::outgoing_message::OutgoingNotificationParams;
 use crate::patch_approval::handle_patch_approval_request;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
@@ -31,6 +33,25 @@ use serde_json::json;
 use tokio::sync::Mutex;
 
 pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
+
+async fn notify_progress(
+    outgoing: Arc<OutgoingMessageSender>,
+    id: RequestId,
+    phase: &str,
+) {
+    let params = serde_json::to_value(OutgoingNotificationParams {
+        meta: Some(OutgoingNotificationMeta::new(Some(id.clone()))),
+        event: json!({ "phase": phase }),
+    })
+    .unwrap_or_else(|_| json!({ "phase": phase }));
+
+    outgoing
+        .send_notification(OutgoingNotification {
+            method: "progress/update".to_string(),
+            params: Some(params),
+        })
+        .await;
+}
 
 /// Run a complete Codex session and stream events back to the client.
 ///
@@ -61,6 +82,8 @@ pub async fn run_codex_tool_session(
                 structured_content: None,
             };
             outgoing.send_response(id.clone(), result).await;
+            // End progress on startup failure.
+            notify_progress(outgoing.clone(), id.clone(), "end").await;
             return;
         }
     };
@@ -76,6 +99,9 @@ pub async fn run_codex_tool_session(
             Some(OutgoingNotificationMeta::new(Some(id.clone()))),
         )
         .await;
+
+    // Emit a simple progress start marker.
+    notify_progress(outgoing.clone(), id.clone(), "start").await;
 
     // Use the original MCP request ID as the `sub_id` for the Codex submission so that
     // any events emitted for this tool-call can be correlated with the
@@ -101,6 +127,8 @@ pub async fn run_codex_tool_session(
         tracing::error!("Failed to submit initial prompt: {e}");
         // unregister the id so we don't keep it in the map
         running_requests_id_to_codex_uuid.lock().await.remove(&id);
+        // End progress on submit failure.
+        notify_progress(outgoing.clone(), id.clone(), "end").await;
         return;
     }
 
@@ -137,6 +165,8 @@ pub async fn run_codex_tool_session_reply(
             .lock()
             .await
             .remove(&request_id);
+        // End progress on submit failure.
+        notify_progress(outgoing.clone(), request_id.clone(), "end").await;
         return;
     }
 
@@ -198,6 +228,8 @@ async fn run_codex_tool_session_inner(
                             "error": err_event.message,
                         });
                         outgoing.send_response(request_id.clone(), result).await;
+                        // End progress on error.
+                        notify_progress(outgoing.clone(), request_id.clone(), "end").await;
                         break;
                     }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
@@ -240,6 +272,8 @@ async fn run_codex_tool_session_inner(
                             .lock()
                             .await
                             .remove(&request_id);
+                        // End progress on success.
+                        notify_progress(outgoing.clone(), request_id.clone(), "end").await;
                         break;
                     }
                     EventMsg::SessionConfigured(_) => {
@@ -302,6 +336,8 @@ async fn run_codex_tool_session_inner(
                     structured_content: None,
                 };
                 outgoing.send_response(request_id.clone(), result).await;
+                // End progress on runtime error.
+                notify_progress(outgoing.clone(), request_id.clone(), "end").await;
                 break;
             }
         }
