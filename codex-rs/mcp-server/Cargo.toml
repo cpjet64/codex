@@ -20,6 +20,7 @@ codex-arg0 = { path = "../arg0" }
 codex-common = { path = "../common", features = ["cli"] }
 codex-core = { path = "../core" }
 codex-login = { path = "../login" }
+codex-mcp-sdk = { path = "../codex-mcp-sdk" }
 codex-protocol = { path = "../protocol" }
 mcp-types = { path = "../mcp-types" }
 schemars = "0.8.22"
@@ -42,23 +43,8 @@ uuid = { version = "1", features = ["serde", "v4"] }
 # Default includes official SDK path for server. Keep legacy runtime
 # behavior unchanged unless CLI selects official.
 default = ["rmcp_sdk"]
-# Enable official SDK (rmcp) server implementation and HTTP transport.
-rmcp_sdk = ["dep:rmcp"]
-
-[dependencies.rmcp]
-version = "^0.6.4"
-optional = true
-# Focus rmcp to used features; server crate owns SDK usage.
-default-features = false
-features = [
-  "server",
-  "transport-io",
-  "macros",
-  "base64",
-  "schemars",
-  # Typed elicitation support used for approvals mapping.
-  "elicitation",
-]
+# Enable official SDK (rmcp) server implementation via codex-mcp-sdk reexports.
+rmcp_sdk = ["codex-mcp-sdk/rmcp"]
 
 [dev-dependencies]
 assert_cmd = "2"
