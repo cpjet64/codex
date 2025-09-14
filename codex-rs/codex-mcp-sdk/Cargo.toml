@@ -11,19 +11,30 @@ anyhow = "1"
 codex-mcp-types = { path = "../codex-mcp-types" }
 
 [features]
+# Keep default features minimal; enable via dependent crates.
 default = []
+# Official Rust MCP SDK (rmcp) usage lives only in this adapter.
 rmcp = ["dep:rmcp-crate"]
 
 [dependencies.rmcp-crate]
 package = "rmcp"
-version = "=0.6.4"
+version = "^0.6.4"
 optional = true
+# Disable defaults; select only what we use.
 default-features = false
 features = [
   "client",
   "server",
+  # IO and child-process stdio transport
   "transport-io",
   "transport-child-process",
+  # Streamable HTTP client transport (reqwest)
+  "transport-streamable-http-client",
+  "transport-streamable-http-client-reqwest",
+  # SSE client transport (reqwest)
+  "transport-sse-client",
+  "transport-sse-client-reqwest",
+  # Macros and schema helpers
   "macros",
   "base64",
   "schemars",
@@ -31,3 +42,6 @@ features = [
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+assert_cmd = "2"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
