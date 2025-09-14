@@ -73,6 +73,64 @@ impl IfaceClient for SdkClient {
     }
 }
 
+// Async API used by the façade in codex-mcp-client. These methods will be
+// wired to the official SDK transports (stdio/http/sse) in later steps.
+impl SdkClient {
+    pub async fn new_stdio_child(
+        _program: std::ffi::OsString,
+        _args: Vec<std::ffi::OsString>,
+        _env: Option<std::collections::HashMap<String, String>>,
+    ) -> std::io::Result<Self> {
+        Err(std::io::Error::other("sdk stdio transport not implemented"))
+    }
+
+    pub async fn send_request<R>(
+        &self,
+        _params: R::Params,
+        _timeout: Option<Duration>,
+    ) -> anyhow::Result<R::Result>
+    where
+        R: ModelContextProtocolRequest,
+        R::Params: Serialize,
+        R::Result: DeserializeOwned,
+    {
+        Err(anyhow::anyhow!("unimplemented"))
+    }
+
+    pub async fn send_notification<N>(&self, _params: N::Params) -> anyhow::Result<()>
+    where
+        N: ModelContextProtocolNotification,
+        N::Params: Serialize,
+    {
+        Err(anyhow::anyhow!("unimplemented"))
+    }
+
+    pub async fn initialize(
+        &self,
+        _p: InitializeRequestParams,
+        _n: Option<serde_json::Value>,
+        _t: Option<Duration>,
+    ) -> anyhow::Result<InitializeResult> {
+        Err(anyhow::anyhow!("unimplemented"))
+    }
+
+    pub async fn list_tools(
+        &self,
+        _p: Option<ListToolsRequestParams>,
+        _t: Option<Duration>,
+    ) -> anyhow::Result<ListToolsResult> {
+        Err(anyhow::anyhow!("unimplemented"))
+    }
+
+    pub async fn call_tool(
+        &self,
+        _name: String,
+        _args: Option<serde_json::Value>,
+        _t: Option<Duration>,
+    ) -> anyhow::Result<CallToolResult> {
+        Err(anyhow::anyhow!("unimplemented"))
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::SdkClient;
