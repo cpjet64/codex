@@ -1,0 +1,29 @@
+[package]
+name = "codex-mcp-sdk"
+version = { workspace = true }
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+codex-mcp-types = { path = "../codex-mcp-types" }
+
+[features]
+default = []
+rmcp = ["dep:rmcp-crate"]
+
+[dependencies.rmcp-crate]
+package = "rmcp"
+version = "=0.6.4"
+optional = true
+default-features = false
+features = [
+  "client",
+  "server",
+  "macros",
+  "base64",
+  "schemars",
+]
+

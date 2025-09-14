@@ -12,6 +12,10 @@ codex-core = { path = "../core" }
 codex-protocol = { path = "../protocol" }
 serde = { version = "1", optional = true }
 toml = { version = "0.9", optional = true }
+sha2 = { version = "0.10", default-features = false }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
 
 [features]
 # Separate feature so that `clap` is not a mandatory dependency.

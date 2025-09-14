@@ -30,11 +30,7 @@ pub fn set_client_impl_override(impl_name: &str) {
 // Visible only in tests: expose the chosen client implementation without spawning.
 #[cfg(test)]
 fn selected_client_impl_for_tests() -> &'static str {
-    let which = CLIENT_IMPL_OVERRIDE
-        .get()
-        .cloned()
-        .or_else(|| std::env::var("CODEX_MCP_CLIENT_IMPL").ok());
-    match which {
+    match CLIENT_IMPL_OVERRIDE.get() {
         Some(v) if v.eq_ignore_ascii_case("official") => "official",
         _ => "legacy",
     }
@@ -47,18 +43,12 @@ impl McpClient {
         env: Option<std::collections::HashMap<String, String>>,
     ) -> std::io::Result<Self> {
         #[cfg(feature = "rmcp_sdk")]
+        if CLIENT_IMPL_OVERRIDE
+            .get()
+            .is_some_and(|v| v.eq_ignore_ascii_case("official"))
         {
-            let which = CLIENT_IMPL_OVERRIDE
-                .get()
-                .cloned()
-                .or_else(|| std::env::var("CODEX_MCP_CLIENT_IMPL").ok())
-                .unwrap_or_else(|| "legacy".to_string());
-            if which.eq_ignore_ascii_case("official") {
-                let c = rmcp_wrapper::RmcpClient::new_stdio_client(program, args, env).await?;
-                return Ok(Self {
-                    inner: Inner::Official(Box::new(c)),
-                });
-            }
+            let c = rmcp_wrapper::RmcpClient::new_stdio_client(program, args, env).await?;
+            return Ok(Self { inner: Inner::Official(Box::new(c)) });
         }
         let c = mcp_client::McpClient::new_stdio_client(program, args, env).await?;
         Ok(Self {

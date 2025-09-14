@@ -1,0 +1,17 @@
+[package]
+name = "codex-mcp-types"
+version = { workspace = true }
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+mcp-types = { path = "../mcp-types" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "0.8.22"
+
+[features]
+default = []
+

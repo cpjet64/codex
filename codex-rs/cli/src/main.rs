@@ -191,6 +191,14 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     {
         set_client_impl_override(v);
         tracing::info!("MCP client implementation selected (config): {}", v);
+    } else if let Ok(v) = std::env::var("CODEX_MCP_CLIENT_IMPL") {
+        let v = v.to_ascii_lowercase();
+        let sel = if v == "official" { "official" } else { "legacy" };
+        set_client_impl_override(sel);
+        tracing::info!(
+            "MCP client implementation selected (env): {}",
+            sel
+        );
     }
 
     match cli.subcommand {
