@@ -31,12 +31,12 @@ Task 02: CLI toggle and precedence
 
 Task 03: SDK client transports
 ------------------------------
-- [ ] Add new_stdio_child(program, args, env)
+- [x] Add new_stdio_child(program, args, env)
 - [ ] Add new_streamable_http_client(url)
 - [ ] Add new_sse_client(url)
 - [ ] Select transport from CLI inputs
 - [ ] Map DTOs to rmcp::model types
-- [ ] Implement initialize/list/call on client
+- [x] Implement initialize/list/call on client
 - [ ] Handle timeouts and cancellations
 - [ ] Add simple HTTP client smoke test
 - [ ] Add SSE client smoke test (optional)

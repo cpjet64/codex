@@ -22,6 +22,7 @@ default-features = false
 features = [
   "client",
   "server",
+  "transport-io",
   "transport-child-process",
   "macros",
   "base64",
