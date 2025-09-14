@@ -1,0 +1,61 @@
+name: MCP Matrix
+
+on:
+  push:
+    branches:
+      - feat/mcp-rust-sdk-conversion
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all -- --check
+
+  sdk-stdio:
+    runs-on: ubuntu-latest
+    env:
+      CODEX_MCP_IMPL: official
+      RUST_LOG: info
+      RUST_TEST_THREADS: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p codex-mcp-server -- --nocapture
+
+  sdk-http:
+    runs-on: ubuntu-latest
+    env:
+      CODEX_MCP_IMPL: official
+      RUST_LOG: info
+      RUST_TEST_THREADS: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: >
+          cargo test -p codex-mcp-server
+          --test http_roundtrip
+          --test http_session_header
+          --test echo_tool_http
+          --test cancel_http
+          --test timeout_call
+          -- --nocapture
+
+  sdk-client:
+    runs-on: ubuntu-latest
+    env:
+      RUST_LOG: info
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p codex-mcp-client --features sdk -- --nocapture
+
+  sdk-sdk:
+    runs-on: ubuntu-latest
+    env:
+      RUST_LOG: info
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p codex-mcp-sdk --features rmcp -- --nocapture
