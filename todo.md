@@ -9,6 +9,7 @@ Task 01: Membrane and traits
 - [x] Add codex‑common crate for shared helpers
 - [x] Move sanitizer into codex‑common
 - [ ] Ensure no rmcp imports outside SDK adapter
+- [x] Ensure no rmcp imports outside SDK adapter
 - [ ] Ensure no legacy JSON types leak to core
 - [ ] Build passes; no API changes to core
 

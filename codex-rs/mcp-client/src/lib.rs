@@ -1,6 +1,4 @@
 mod mcp_client;
-#[cfg(feature = "rmcp_sdk")]
-mod rmcp_wrapper;
 use std::sync::OnceLock;
 
 /// Runtime-switchable MCP client that can use either the legacy JSON-RPC
@@ -13,8 +11,6 @@ pub struct McpClient {
 
 enum Inner {
     Legacy(Box<mcp_client::McpClient>),
-    #[cfg(feature = "rmcp_sdk")]
-    Official(Box<rmcp_wrapper::RmcpClient>),
 }
 
 // Optional process-local override for client selection without mutating env.
@@ -42,14 +38,7 @@ impl McpClient {
         args: Vec<std::ffi::OsString>,
         env: Option<std::collections::HashMap<String, String>>,
     ) -> std::io::Result<Self> {
-        #[cfg(feature = "rmcp_sdk")]
-        if CLIENT_IMPL_OVERRIDE
-            .get()
-            .is_some_and(|v| v.eq_ignore_ascii_case("official"))
-        {
-            let c = rmcp_wrapper::RmcpClient::new_stdio_client(program, args, env).await?;
-            return Ok(Self { inner: Inner::Official(Box::new(c)) });
-        }
+        // Official SDK path not wired in this crate; always use legacy.
         let c = mcp_client::McpClient::new_stdio_client(program, args, env).await?;
         Ok(Self {
             inner: Inner::Legacy(Box::new(c)),
@@ -68,8 +57,7 @@ impl McpClient {
     {
         match &self.inner {
             Inner::Legacy(c) => c.send_request::<R>(params, timeout).await,
-            #[cfg(feature = "rmcp_sdk")]
-            Inner::Official(c) => c.send_request::<R>(params, timeout).await,
+            
         }
     }
 
@@ -80,8 +68,7 @@ impl McpClient {
     {
         match &self.inner {
             Inner::Legacy(c) => c.send_notification::<N>(params).await,
-            #[cfg(feature = "rmcp_sdk")]
-            Inner::Official(c) => c.send_notification::<N>(params).await,
+            
         }
     }
 
@@ -96,11 +83,7 @@ impl McpClient {
                 c.initialize(initialize_params, initialize_notification_params, timeout)
                     .await
             }
-            #[cfg(feature = "rmcp_sdk")]
-            Inner::Official(c) => {
-                c.initialize(initialize_params, initialize_notification_params, timeout)
-                    .await
-            }
+            
         }
     }
 
@@ -111,8 +94,7 @@ impl McpClient {
     ) -> anyhow::Result<mcp_types::ListToolsResult> {
         match &self.inner {
             Inner::Legacy(c) => c.list_tools(params, timeout).await,
-            #[cfg(feature = "rmcp_sdk")]
-            Inner::Official(c) => c.list_tools(params, timeout).await,
+            
         }
     }
 
@@ -124,8 +106,7 @@ impl McpClient {
     ) -> anyhow::Result<mcp_types::CallToolResult> {
         match &self.inner {
             Inner::Legacy(c) => c.call_tool(name, arguments, timeout).await,
-            #[cfg(feature = "rmcp_sdk")]
-            Inner::Official(c) => c.call_tool(name, arguments, timeout).await,
+            
         }
     }
 }
