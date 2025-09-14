@@ -2,7 +2,7 @@
 Task 01: Membrane and traits
 ----------------------------
 - [x] Create codex‑mcp‑types crate with neutral DTOs
-- [ ] Define ToolSpec, ToolCall, ToolResult DTOs
+- [x] Define ToolSpec, ToolCall, ToolResult DTOs
 - [x] Add serde + schemars derives for DTOs
 - [x] Create iface module with McpClient trait
 - [x] Create iface module with McpServer trait

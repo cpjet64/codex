@@ -61,3 +61,7 @@ pub trait McpServer {
     fn as_name(&self) -> &'static str;
 }
 
+// Neutral DTO aliases for clarity in core.
+pub type ToolSpec = mcp_types::Tool;
+pub type ToolCall = mcp_types::CallToolRequestParams;
+pub type ToolResult = mcp_types::CallToolResult;
