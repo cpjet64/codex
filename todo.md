@@ -97,7 +97,7 @@ Task 08: Error handling and logs
 - [ ] Add a small error type if needed
 - [x] Add stderr capture flag for dev
 - [x] Add error path unit tests
-- [ ] Add timeout path test
+- [x] Add timeout path test
 - [ ] Add cancellation path test
 - [ ] Prefix logs with adapter tag
 - [ ] Keep log lines short and useful
@@ -107,9 +107,9 @@ Task 09: Cargo features and versions
 ------------------------------------
 - [x] Use caret rmcp version unless pin justified
 - [ ] Split client and server features per crate
-- [ ] Remove unused feature flags
+- [x] Remove unused feature flags (HTTP/SSE enabled in SDK)
 - [ ] Default features minimal (default = [])
-- [ ] Add feature docs in Cargo.toml comments
+- [x] Add feature docs in Cargo.toml comments
 - [ ] Add cargo tree feature check to CI
 - [ ] Ensure no server features in client crate
 - [ ] Ensure no client features in server crate
@@ -123,7 +123,7 @@ Task 10: Test matrix and parity
 - [x] Add sdk-http parity tests
 - [x] Add session header HTTP test
 - [ ] Add progress tests for both transports
-- [ ] Add cancel tests for both transports
+- [x] Add cancel tests for both transports
 - [ ] Keep tests within size limits
 - [ ] Mark SSE tests optional or skipped
 - [ ] Ensure tests do not create PRs
@@ -159,8 +159,9 @@ Notes
 -----
 - Use only allowed MCP tools. No PRs or issues.
 - Update checkboxes as you progress.
-- Progress: added HTTP client smoke test; fixed stdio test gate; checked
-  docs and help for new flags; confirmed loopback bind default via CLI;
-  SDK HTTP session header test present.
+- Progress: added HTTP cancel test and timeout test for call_tool.
+- Progress: documented cargo features (SDK, server) and switched rmcp
+  versions to caret.
+- Progress: SDK crate enables HTTP/SSE client transports in rmcp.
 - Note: semgrep_findings blocked by missing token; will run when
   SEMGREP_APP_TOKEN is configured.
