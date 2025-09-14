@@ -162,3 +162,5 @@ Notes
 - Progress: added HTTP client smoke test; fixed stdio test gate; checked
   docs and help for new flags; confirmed loopback bind default via CLI;
   SDK HTTP session header test present.
+- Note: semgrep_findings blocked by missing token; will run when
+  SEMGREP_APP_TOKEN is configured.
