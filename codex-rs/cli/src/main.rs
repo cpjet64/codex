@@ -32,11 +32,7 @@ use crate::proto::ProtoCli;
 #[clap(
     author,
     version,
-    // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
-    // The executable is sometimes invoked via a platform‑specific name like
-    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codex` command name that users run.
     bin_name = "codex"
 )]
 struct MultitoolCli {
@@ -77,7 +73,7 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// Experimental: run Codex as an MCP server.
+    /// Run Codex as an MCP server (Ctrl+C to stop).
     Mcp,
 
     /// Run the Protocol stream via stdin/stdout
@@ -90,7 +86,7 @@ enum Subcommand {
     /// Internal debugging commands.
     Debug(DebugArgs),
 
-    /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
+    /// Apply the latest diff produced by Codex agent as a `git apply`.
     #[clap(visible_alias = "a")]
     Apply(ApplyCommand),
 
@@ -165,7 +161,6 @@ fn main() -> anyhow::Result<()> {
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let cli = MultitoolCli::parse();
-    // Compute SDK client transport once from CLI.
     let selected_transport = if cli.mcp_client_sse {
         "sse"
     } else if cli.mcp_client_url.is_some() {
@@ -173,18 +168,12 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     } else {
         "stdio"
     };
-    tracing::info!(
-        "MCP client transport selected: {}",
-        selected_transport
-    );
+    tracing::info!("MCP client transport selected: {}", selected_transport);
 
-    // Load config.toml early to derive defaults for server/client impl when
-    // neither CLI nor env override is provided.
     let cfg_toml: Option<ConfigToml> = find_codex_home()
         .ok()
         .and_then(|home| load_config_as_toml_with_cli_overrides(&home, vec![]).ok());
 
-    // Server impl selection: env/CLI take precedence, else config default.
     let mut selected_impl: McpImpl = cli.mcp_impl.selected_or_default();
     if std::env::var("CODEX_MCP_IMPL").is_err()
         && cli.mcp_impl.mcp_impl.is_none()
@@ -198,14 +187,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     }
     tracing::info!("MCP implementation selected: {}", selected_impl.as_str());
 
-    // Plumb client selection via env var so core/client can pick it up at runtime.
-    // Client impl selection: if CLI flag set, override; else use config if present.
     if let Some(client_impl) = cli.mcp_client_impl {
         set_client_impl_override(client_impl.as_str());
-        tracing::info!(
-            "MCP client implementation selected: {}",
-            client_impl.as_str()
-        );
+        tracing::info!("MCP client implementation selected: {}", client_impl.as_str());
     } else if let Some(cfg) = cfg_toml.as_ref()
         && let Some(v) = cfg.mcp_client_impl.as_deref()
     {
@@ -215,10 +199,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         let v = v.to_ascii_lowercase();
         let sel = if v == "official" { "official" } else { "legacy" };
         set_client_impl_override(sel);
-        tracing::info!(
-            "MCP client implementation selected (env): {}",
-            sel
-        );
+        tracing::info!("MCP client implementation selected (env): {}", sel);
     }
 
     match cli.subcommand {
@@ -298,8 +279,6 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     Ok(())
 }
 
-/// Prepend root-level overrides so they have lower precedence than
-/// CLI-specific ones specified after the subcommand (if any).
 fn prepend_config_flags(
     subcommand_config_overrides: &mut CliConfigOverrides,
     cli_config_overrides: CliConfigOverrides,
