@@ -39,12 +39,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [features]
+# Default includes official SDK path for server. Keep legacy runtime
+# behavior unchanged unless CLI selects official.
 default = ["rmcp_sdk"]
+# Enable official SDK (rmcp) server implementation and HTTP transport.
 rmcp_sdk = ["dep:rmcp"]
 
 [dependencies.rmcp]
-version = "=0.6.4"
+version = "^0.6.4"
 optional = true
+# Focus rmcp to used features; server crate owns SDK usage.
 default-features = false
 features = [
   "server",
@@ -52,10 +56,9 @@ features = [
   "macros",
   "base64",
   "schemars",
-  # For future typed elicitation support; currently not used to keep params transparent.
+  # Typed elicitation support used for approvals mapping.
   "elicitation",
 ]
-
 
 [dev-dependencies]
 assert_cmd = "2"
@@ -66,3 +69,4 @@ pretty_assertions = "1.4.1"
 shell-escape = "0.1.5"
 tempfile = "3"
 wiremock = "0.6"
+reqwest = { version = "0.12", features = ["json"] }
