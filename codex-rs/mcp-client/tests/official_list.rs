@@ -1,4 +1,4 @@
-#![cfg(feature = "rmcp_sdk")]
+#![cfg(feature = "sdk")]
 
 use std::collections::HashMap;
 use std::ffi::OsString;
