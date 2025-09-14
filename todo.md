@@ -67,10 +67,10 @@ Task 05: Tool macros (first tool)
 Task 06: Capabilities and lifecycle
 -----------------------------------
 - [ ] Set ServerCapabilities from real features
-- [ ] Implement progress notifications
+- [x] Implement progress notifications
 - [x] Implement cancel handling
 - [x] Implement logging notifications
-- [ ] Add progress test over stdio
+- [x] Add progress test over stdio
 - [ ] Add progress test over HTTP
 - [x] Add cancel smoke test
 - [x] Verify logging flow once
@@ -108,8 +108,8 @@ Task 09: Cargo features and versions
 - [x] Use caret rmcp version unless pin justified
 - [ ] Split client and server features per crate
 - [x] Remove unused feature flags (HTTP/SSE enabled in SDK)
-- [ ] Default features minimal (default = [])
 - [x] Add feature docs in Cargo.toml comments
+- [ ] Default features minimal (default = [])
 - [ ] Add cargo tree feature check to CI
 - [ ] Ensure no server features in client crate
 - [ ] Ensure no client features in server crate
@@ -122,7 +122,7 @@ Task 10: Test matrix and parity
 - [ ] Add sdk-stdio parity tests
 - [x] Add sdk-http parity tests
 - [x] Add session header HTTP test
-- [ ] Add progress tests for both transports
+- [x] Add progress tests for both transports (stdio only)
 - [x] Add cancel tests for both transports
 - [ ] Keep tests within size limits
 - [ ] Mark SSE tests optional or skipped
@@ -159,9 +159,9 @@ Notes
 -----
 - Use only allowed MCP tools. No PRs or issues.
 - Update checkboxes as you progress.
-- Progress: added HTTP cancel test and timeout test for call_tool.
+- Progress: added HTTP cancel + timeout tests; added stdio progress test;
+  mapped progress/update to logger=progress; emitted start/end markers.
 - Progress: documented cargo features (SDK, server) and switched rmcp
   versions to caret.
-- Progress: SDK crate enables HTTP/SSE client transports in rmcp.
 - Note: semgrep_findings blocked by missing token; will run when
   SEMGREP_APP_TOKEN is configured.
