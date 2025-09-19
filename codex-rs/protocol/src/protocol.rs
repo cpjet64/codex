@@ -414,6 +414,7 @@ pub struct Event {
 }
 
 /// Response event from the agent
+/// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -514,7 +515,12 @@ pub enum EventMsg {
     EnteredReviewMode(ReviewRequest),
 
     /// Exited review mode with an optional final result to apply.
-    ExitedReviewMode(Option<ReviewOutputEvent>),
+    ExitedReviewMode(ExitedReviewModeEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ExitedReviewModeEvent {
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -1234,6 +1240,7 @@ pub struct TurnAbortedEvent {
 pub enum TurnAbortReason {
     Interrupted,
     Replaced,
+    ReviewEnded,
 }
 
 #[cfg(test)]
@@ -1246,7 +1253,8 @@ mod tests {
     /// amount of nesting.
     #[test]
     fn serialize_event() {
-        let conversation_id = ConversationId(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"));
+        let conversation_id =
+            ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
         let rollout_file = NamedTempFile::new().unwrap();
         let event = Event {
             id: "1234".to_string(),

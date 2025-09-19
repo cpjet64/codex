@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::app::App;
 use crate::history_cell::UserHistoryCell;
@@ -335,6 +336,7 @@ impl App {
             initial_prompt: None,
             initial_images: Vec::new(),
             enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
         };
         self.chat_widget =
             crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
@@ -349,19 +351,127 @@ impl App {
 
     /// Trim transcript_cells to preserve only content up to the selected user message.
     fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
-        let cut_idx = self
-            .transcript_cells
+        trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message);
+    }
+}
+
+fn trim_transcript_cells_to_nth_user(
+    transcript_cells: &mut Vec<Arc<dyn crate::history_cell::HistoryCell>>,
+    nth_user_message: usize,
+) {
+    if nth_user_message == usize::MAX {
+        return;
+    }
+
+    let cut_idx = transcript_cells
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, cell)| cell.as_any().is::<UserHistoryCell>().then_some(idx))
+        .nth(nth_user_message)
+        .unwrap_or(transcript_cells.len());
+    transcript_cells.truncate(cut_idx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history_cell::AgentMessageCell;
+    use crate::history_cell::HistoryCell;
+    use ratatui::prelude::Line;
+    use std::sync::Arc;
+
+    #[test]
+    fn trim_transcript_for_first_user_drops_user_and_newer_cells() {
+        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(UserHistoryCell {
+                message: "first user".to_string(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("assistant")], true))
+                as Arc<dyn HistoryCell>,
+        ];
+
+        trim_transcript_cells_to_nth_user(&mut cells, 0);
+
+        assert!(cells.is_empty());
+    }
+
+    #[test]
+    fn trim_transcript_preserves_cells_before_selected_user() {
+        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(AgentMessageCell::new(vec![Line::from("intro")], true))
+                as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("after")], false))
+                as Arc<dyn HistoryCell>,
+        ];
+
+        trim_transcript_cells_to_nth_user(&mut cells, 0);
+
+        assert_eq!(cells.len(), 1);
+        let agent = cells[0]
+            .as_any()
+            .downcast_ref::<AgentMessageCell>()
+            .expect("agent cell");
+        let agent_lines = agent.display_lines(u16::MAX);
+        assert_eq!(agent_lines.len(), 1);
+        let intro_text: String = agent_lines[0]
+            .spans
             .iter()
-            .enumerate()
-            .filter_map(|(idx, cell)| {
-                if cell.as_any().is::<UserHistoryCell>() {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .nth(nth_user_message - 1)
-            .unwrap_or(self.transcript_cells.len());
-        self.transcript_cells.truncate(cut_idx);
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(intro_text, "> intro");
+    }
+
+    #[test]
+    fn trim_transcript_for_later_user_keeps_prior_history() {
+        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(AgentMessageCell::new(vec![Line::from("intro")], true))
+                as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("between")], false))
+                as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("tail")], false))
+                as Arc<dyn HistoryCell>,
+        ];
+
+        trim_transcript_cells_to_nth_user(&mut cells, 1);
+
+        assert_eq!(cells.len(), 3);
+        let agent_intro = cells[0]
+            .as_any()
+            .downcast_ref::<AgentMessageCell>()
+            .expect("intro agent");
+        let intro_lines = agent_intro.display_lines(u16::MAX);
+        let intro_text: String = intro_lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(intro_text, "> intro");
+
+        let user_first = cells[1]
+            .as_any()
+            .downcast_ref::<UserHistoryCell>()
+            .expect("first user");
+        assert_eq!(user_first.message, "first");
+
+        let agent_between = cells[2]
+            .as_any()
+            .downcast_ref::<AgentMessageCell>()
+            .expect("between agent");
+        let between_lines = agent_between.display_lines(u16::MAX);
+        let between_text: String = between_lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(between_text, "  between");
     }
 }
