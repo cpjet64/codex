@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::AuthManager;
+use crate::auth::CodexAuth;
 use bytes::Bytes;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -11,6 +12,7 @@ use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -40,6 +42,8 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
+use crate::protocol::RateLimitSnapshot;
+use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
@@ -182,7 +186,7 @@ impl ModelClient {
 
         // Only include `text.verbosity` for GPT-5 family models
         let text = if self.config.model_family.family == "gpt-5" {
-            create_text_param_for_request(self.config.model_verbosity)
+            create_text_param_for_request(self.config.model_verbosity, &prompt.output_schema)
         } else {
             if self.config.model_verbosity.is_some() {
                 warn!(
@@ -274,6 +278,15 @@ impl ModelClient {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
+                    if let Some(snapshot) = parse_rate_limit_snapshot(resp.headers())
+                        && tx_event
+                            .send(Ok(ResponseEvent::RateLimits(snapshot)))
+                            .await
+                            .is_err()
+                    {
+                        debug!("receiver dropped rate limit snapshot event");
+                    }
+
                     // spawn task to process SSE
                     let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
                     tokio::spawn(process_sse(
@@ -318,6 +331,7 @@ impl ModelClient {
                     }
 
                     if status == StatusCode::TOO_MANY_REQUESTS {
+                        let rate_limit_snapshot = parse_rate_limit_snapshot(res.headers());
                         let body = res.json::<ErrorResponse>().await.ok();
                         if let Some(ErrorResponse { error }) = body {
                             if error.r#type.as_deref() == Some("usage_limit_reached") {
@@ -326,11 +340,12 @@ impl ModelClient {
                                 // token.
                                 let plan_type = error
                                     .plan_type
-                                    .or_else(|| auth.as_ref().and_then(|a| a.get_plan_type()));
+                                    .or_else(|| auth.as_ref().and_then(CodexAuth::get_plan_type));
                                 let resets_in_seconds = error.resets_in_seconds;
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
                                     plan_type,
                                     resets_in_seconds,
+                                    rate_limits: rate_limit_snapshot,
                                 }));
                             } else if error.r#type.as_deref() == Some("usage_not_included") {
                                 return Err(CodexErr::UsageNotIncluded);
@@ -401,9 +416,6 @@ struct SseEvent {
 }
 
 #[derive(Debug, Deserialize)]
-struct ResponseCreated {}
-
-#[derive(Debug, Deserialize)]
 struct ResponseCompleted {
     id: String,
     usage: Option<ResponseCompletedUsage>,
@@ -471,6 +483,58 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
             }
         }
     }
+}
+
+fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
+    let primary = parse_rate_limit_window(
+        headers,
+        "x-codex-primary-used-percent",
+        "x-codex-primary-window-minutes",
+        "x-codex-primary-reset-after-seconds",
+    );
+
+    let secondary = parse_rate_limit_window(
+        headers,
+        "x-codex-secondary-used-percent",
+        "x-codex-secondary-window-minutes",
+        "x-codex-secondary-reset-after-seconds",
+    );
+
+    if primary.is_none() && secondary.is_none() {
+        return None;
+    }
+
+    Some(RateLimitSnapshot { primary, secondary })
+}
+
+fn parse_rate_limit_window(
+    headers: &HeaderMap,
+    used_percent_header: &str,
+    window_minutes_header: &str,
+    resets_header: &str,
+) -> Option<RateLimitWindow> {
+    let used_percent = parse_header_f64(headers, used_percent_header)?;
+
+    Some(RateLimitWindow {
+        used_percent,
+        window_minutes: parse_header_u64(headers, window_minutes_header),
+        resets_in_seconds: parse_header_u64(headers, resets_header),
+    })
+}
+
+fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
+    parse_header_str(headers, name)?
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+}
+
+fn parse_header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
+    parse_header_str(headers, name)?.parse::<u64>().ok()
+}
+
+fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name)?.to_str().ok()
 }
 
 async fn process_sse<S>(
