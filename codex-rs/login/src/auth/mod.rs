@@ -1,4 +1,5 @@
 mod access_token;
+mod account_store;
 mod agent_identity;
 mod auth_headers;
 mod bedrock_access_keys;
@@ -14,6 +15,10 @@ mod external_bearer;
 mod manager;
 mod revoke;
 
+pub use account_store::AccountProfileMetadata;
+pub use account_store::AccountProfiles;
+pub use account_store::AuthAccountStore;
+pub use account_store::InactiveAccountProfile;
 pub use auth_headers::AuthHeaders;
 pub use bedrock_access_keys::BedrockAccessKeysAuth;
 pub use bedrock_access_keys::login_with_bedrock_access_keys;

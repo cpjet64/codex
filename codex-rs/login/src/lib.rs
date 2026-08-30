@@ -26,7 +26,10 @@ pub use success_page::CODEX_OPEN_APP_URL;
 pub use success_page::LoginSuccessPage;
 pub use success_page::LoginSuccessPageBrand;
 
+pub use auth::AccountProfileMetadata;
+pub use auth::AccountProfiles;
 pub use auth::AgentIdentityAuthPolicy;
+pub use auth::AuthAccountStore;
 pub use auth::AuthConfig;
 pub use auth::AuthDotJson;
 pub use auth::AuthHeaders;
@@ -43,6 +46,7 @@ pub use auth::ExternalAuth;
 pub use auth::ExternalAuthFuture;
 pub use auth::ExternalAuthRefreshContext;
 pub use auth::ExternalAuthRefreshReason;
+pub use auth::InactiveAccountProfile;
 pub use auth::OPENAI_API_KEY_ENV_VAR;
 pub use auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 pub use auth::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;

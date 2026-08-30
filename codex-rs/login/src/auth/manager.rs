@@ -46,6 +46,7 @@ pub use crate::auth::agent_identity::AgentIdentityAuthError;
 pub use crate::auth::bedrock_access_keys::BedrockAccessKeysAuth;
 pub use crate::auth::bedrock_api_key::BedrockApiKeyAuth;
 pub use crate::auth::personal_access_token::PersonalAccessTokenAuth;
+use crate::auth::storage::ActiveAuthMutation;
 pub use crate::auth::storage::AgentIdentityAuthRecord;
 pub use crate::auth::storage::AgentIdentityStorage;
 pub use crate::auth::storage::AuthDotJson;
@@ -897,12 +898,7 @@ fn persist_agent_identity_record(
     let mut guard = auth_dot_json
         .lock()
         .map_err(|_| std::io::Error::other("failed to lock auth state"))?;
-    let mut auth = storage
-        .load()?
-        .or_else(|| guard.clone())
-        .ok_or_else(|| std::io::Error::other("auth data is not available"))?;
-    auth.agent_identity = Some(AgentIdentityStorage::Record(record));
-    storage.save(&auth)?;
+    let auth = storage.mutate_active(ActiveAuthMutation::AgentIdentity(record))?;
     *guard = Some(auth);
     Ok(())
 }
@@ -1559,23 +1555,15 @@ fn persist_tokens(
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> std::io::Result<AuthDotJson> {
-    let mut auth_dot_json = storage
-        .load()?
-        .ok_or(std::io::Error::other("Token data is not available."))?;
-
-    let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
-    if let Some(id_token) = id_token {
-        tokens.id_token = parse_chatgpt_jwt_claims(&id_token).map_err(std::io::Error::other)?;
-    }
-    if let Some(access_token) = access_token {
-        tokens.access_token = access_token;
-    }
-    if let Some(refresh_token) = refresh_token {
-        tokens.refresh_token = refresh_token;
-    }
-    auth_dot_json.last_refresh = Some(Utc::now());
-    storage.save(&auth_dot_json)?;
-    Ok(auth_dot_json)
+    let id_token = id_token
+        .map(|id_token| parse_chatgpt_jwt_claims(&id_token).map_err(std::io::Error::other))
+        .transpose()?;
+    storage.mutate_active(ActiveAuthMutation::Tokens {
+        id_token,
+        access_token,
+        refresh_token,
+        refreshed_at: Utc::now(),
+    })
 }
 
 // Requests refreshed ChatGPT OAuth tokens from the auth service using a refresh token.
@@ -2424,8 +2412,13 @@ impl AuthManager {
     /// Reloads auth from the active source. Returns whether the auth value changed.
     pub async fn reload(&self) -> bool {
         tracing::info!("Reloading auth");
-        let new_auth = self.load_auth().await;
-        self.set_cached_auth(new_auth)
+        match self.load_auth().await {
+            Ok(new_auth) => self.set_cached_auth(new_auth),
+            Err(err) => {
+                tracing::error!("Failed to reload auth: {err}");
+                false
+            }
+        }
     }
 
     async fn reload_if_account_id_matches(
@@ -2440,7 +2433,13 @@ impl AuthManager {
             }
         };
 
-        let new_auth = self.load_auth().await;
+        let new_auth = match self.load_auth().await {
+            Ok(auth) => auth,
+            Err(err) => {
+                tracing::error!("Skipping auth reload after storage failure: {err}");
+                return ReloadOutcome::Skipped;
+            }
+        };
         let new_account_id = new_auth.as_ref().and_then(CodexAuth::get_account_id);
 
         if new_account_id.as_deref() != Some(expected_account_id) {
@@ -2517,30 +2516,34 @@ impl AuthManager {
         }
     }
 
-    async fn load_auth(&self) -> Option<CodexAuth> {
+    async fn load_auth(&self) -> std::io::Result<Option<CodexAuth>> {
         if let Some(external_auth) = self.external_auth_provider() {
             let cached_auth = self.auth_cached();
             if cached_auth
                 .as_ref()
                 .is_some_and(|auth| self.refresh_failure_for_auth(auth).is_some())
             {
-                return cached_auth;
+                return Ok(cached_auth);
             }
-            return match self.resolve_external_auth(external_auth.as_ref()).await {
-                Ok(auth) => Some(auth),
-                Err(err) => {
-                    tracing::error!("Failed to resolve external auth: {err}");
-                    match err {
-                        RefreshTokenError::Permanent(error) => {
-                            if let Some(auth) = cached_auth.as_ref() {
-                                self.record_permanent_refresh_failure_if_unchanged(auth, &error);
+            return Ok(
+                match self.resolve_external_auth(external_auth.as_ref()).await {
+                    Ok(auth) => Some(auth),
+                    Err(err) => {
+                        tracing::error!("Failed to resolve external auth: {err}");
+                        match err {
+                            RefreshTokenError::Permanent(error) => {
+                                if let Some(auth) = cached_auth.as_ref() {
+                                    self.record_permanent_refresh_failure_if_unchanged(
+                                        auth, &error,
+                                    );
+                                }
+                                cached_auth
                             }
-                            cached_auth
+                            RefreshTokenError::Transient(_) => None,
                         }
-                        RefreshTokenError::Transient(_) => None,
                     }
-                }
-            };
+                },
+            );
         }
 
         let allowed_login_methods = self.allowed_login_methods();
@@ -2557,15 +2560,15 @@ impl AuthManager {
             &self.auth_route_config,
         )
         .await
-        .ok()
-        .flatten()
-        .filter(|auth| {
-            validate_auth_restrictions(
-                Some(&allowed_login_methods),
-                effective_chatgpt_workspaces.as_deref(),
-                auth,
-            )
-            .is_ok()
+        .map(|auth| {
+            auth.filter(|auth| {
+                validate_auth_restrictions(
+                    Some(&allowed_login_methods),
+                    effective_chatgpt_workspaces.as_deref(),
+                    auth,
+                )
+                .is_ok()
+            })
         })
     }
 

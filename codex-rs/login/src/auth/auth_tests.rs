@@ -1,4 +1,7 @@
 use super::*;
+use crate::auth::AccountProfileMetadata;
+use crate::auth::AccountProfiles;
+use crate::auth::AuthAccountStore;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
@@ -32,6 +35,21 @@ use wiremock::matchers::path;
 const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
 const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
 const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
+
+fn profile_store(auth: AuthDotJson) -> AuthAccountStore {
+    AuthAccountStore {
+        active_auth: auth,
+        account_profiles: Some(AccountProfiles {
+            version: 1,
+            active_profile: AccountProfileMetadata {
+                id: "active".to_string(),
+                label: "Active".to_string(),
+            },
+            inactive_profiles: Vec::new(),
+        }),
+        pending_keyring_write: false,
+    }
+}
 
 #[test]
 fn header_auth_exposes_a_valid_chatgpt_account_id() {
@@ -71,6 +89,15 @@ async fn refresh_without_id_token() {
     )
     .expect("failed to write auth file");
 
+    let file_storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let store = profile_store(
+        file_storage
+            .load()
+            .expect("load auth")
+            .expect("stored auth"),
+    );
+    let expected_profiles = store.account_profiles.clone();
+    file_storage.save_store(&store).expect("save account store");
     let storage = create_auth_storage(
         codex_home.path().to_path_buf(),
         AuthCredentialsStoreMode::File,
@@ -88,26 +115,37 @@ async fn refresh_without_id_token() {
     assert_eq!(tokens.id_token.raw_jwt, fake_jwt);
     assert_eq!(tokens.access_token, "new-access-token");
     assert_eq!(tokens.refresh_token, "new-refresh-token");
+    assert!(
+        storage
+            .load_store()
+            .expect("load account store")
+            .expect("stored account store")
+            .account_profiles
+            == expected_profiles
+    );
 }
 
 #[test]
 fn login_with_api_key_overwrites_existing_auth_json() {
     let dir = tempdir().unwrap();
     let auth_path = dir.path().join("auth.json");
-    let stale_auth = json!({
-        "OPENAI_API_KEY": "sk-old",
-        "tokens": {
-            "id_token": "stale.header.payload",
-            "access_token": "stale-access",
-            "refresh_token": "stale-refresh",
-            "account_id": "stale-acc"
-        }
-    });
-    std::fs::write(
-        &auth_path,
-        serde_json::to_string_pretty(&stale_auth).unwrap(),
+    let storage = FileAuthStorage::new(dir.path().to_path_buf());
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: Some("sk-old".to_string()),
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("stale-acc".to_string()),
+        },
+        dir.path(),
     )
-    .unwrap();
+    .expect("seed stale auth");
+    let stale_auth = storage
+        .load()
+        .expect("load stale auth")
+        .expect("stored auth");
+    storage
+        .save_store(&profile_store(stale_auth))
+        .expect("seed profiles");
 
     super::login_with_api_key(
         dir.path(),
@@ -117,12 +155,19 @@ fn login_with_api_key_overwrites_existing_auth_json() {
     )
     .expect("login_with_api_key should succeed");
 
-    let storage = FileAuthStorage::new(dir.path().to_path_buf());
     let auth = storage
         .try_read_auth_json(&auth_path)
         .expect("auth.json should parse");
     assert_eq!(auth.openai_api_key.as_deref(), Some("sk-new"));
     assert!(auth.tokens.is_none(), "tokens should be cleared");
+    assert!(
+        storage
+            .load_store()
+            .expect("load store")
+            .expect("stored auth")
+            .account_profiles
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -566,6 +611,10 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
         },
         codex_home.path(),
     )?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let store = profile_store(storage.load()?.expect("stored auth"));
+    let expected_profiles = store.account_profiles.clone();
+    storage.save_store(&store)?;
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
@@ -648,6 +697,13 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
         .expect("identity should persist");
     assert_eq!(persisted.agent_runtime_id, "agent-runtime-123");
     assert_eq!(persisted.task_id.as_deref(), Some("task-123"));
+    assert!(
+        storage
+            .load_store()?
+            .expect("stored account store")
+            .account_profiles
+            == expected_profiles
+    );
 
     let reloaded = super::load_auth(
         codex_home.path(),
