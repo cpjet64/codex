@@ -40,6 +40,7 @@ use super::external_bearer::BearerTokenRefresher;
 use super::revoke::revoke_auth_tokens;
 use super::workload_identity::WorkloadIdentityExternalAuth;
 use super::workload_identity::WorkloadIdentitySessionError;
+use crate::auth::AccountProfileMetadata;
 use crate::auth::AuthHeaders;
 pub use crate::auth::agent_identity::AgentIdentityAuth;
 pub use crate::auth::agent_identity::AgentIdentityAuthError;
@@ -950,19 +951,21 @@ pub async fn logout_with_revoke(
     keyring_backend_kind: AuthKeyringBackendKind,
     auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<bool> {
-    let auth_dot_json = match load_auth_dot_json(
+    let stored_auth = match load_stored_auth_for_revoke(
         codex_home,
         auth_credentials_store_mode,
         keyring_backend_kind,
     ) {
-        Ok(auth_dot_json) => auth_dot_json,
+        Ok(auth) => auth,
         Err(err) => {
             tracing::warn!("failed to load stored auth during logout: {err}");
-            None
+            Vec::new()
         }
     };
-    if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref(), auth_route_config).await {
-        tracing::warn!("failed to revoke auth tokens during logout: {err}");
+    for auth in &stored_auth {
+        if let Err(err) = revoke_auth_tokens(Some(auth), auth_route_config).await {
+            tracing::warn!("failed to revoke auth tokens during logout: {err}");
+        }
     }
     logout_all_stores(
         codex_home,
@@ -996,6 +999,58 @@ pub fn login_with_api_key(
     )
 }
 
+fn load_stored_auth_for_revoke(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> std::io::Result<Vec<AuthDotJson>> {
+    let storage = create_auth_storage(
+        codex_home.to_path_buf(),
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    );
+    let Some(store) = storage.load_store()? else {
+        return Ok(Vec::new());
+    };
+    let mut auth = vec![store.active_auth];
+    if let Some(profiles) = store.account_profiles {
+        auth.extend(
+            profiles
+                .inactive_profiles
+                .into_iter()
+                .map(|profile| profile.auth),
+        );
+    }
+    Ok(auth)
+}
+
+/// Stores an API key as a named profile without changing the active account.
+pub fn login_with_api_key_for_profile(
+    codex_home: &Path,
+    profile: AccountProfileMetadata,
+    api_key: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> std::io::Result<()> {
+    let auth = AuthDotJson {
+        auth_mode: Some(AuthMode::ApiKey),
+        openai_api_key: Some(api_key.to_string()),
+        tokens: None,
+        last_refresh: None,
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    };
+    save_profile_auth(
+        codex_home,
+        profile,
+        &auth,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    )
+}
+
 /// Writes an `auth.json` that contains only the access token.
 pub async fn login_with_access_token(
     codex_home: &Path,
@@ -1006,11 +1061,59 @@ pub async fn login_with_access_token(
     keyring_backend_kind: AuthKeyringBackendKind,
     auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<()> {
-    let auth_dot_json = match classify_codex_access_token(access_token) {
+    let auth_dot_json = auth_from_access_token(
+        access_token,
+        forced_chatgpt_workspace_id,
+        chatgpt_base_url,
+        auth_route_config,
+    )
+    .await?;
+    save_auth(
+        codex_home,
+        &auth_dot_json,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    )
+}
+
+/// Stores a validated access token as a named profile without changing the active account.
+pub async fn login_with_access_token_for_profile(
+    codex_home: &Path,
+    profile: AccountProfileMetadata,
+    access_token: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    forced_chatgpt_workspace_id: Option<&[String]>,
+    chatgpt_base_url: Option<&str>,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    auth_route_config: &AuthRouteConfig,
+) -> std::io::Result<()> {
+    let auth = auth_from_access_token(
+        access_token,
+        forced_chatgpt_workspace_id,
+        chatgpt_base_url,
+        auth_route_config,
+    )
+    .await?;
+    save_profile_auth(
+        codex_home,
+        profile,
+        &auth,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    )
+}
+
+async fn auth_from_access_token(
+    access_token: &str,
+    forced_chatgpt_workspace_id: Option<&[String]>,
+    chatgpt_base_url: Option<&str>,
+    auth_route_config: &AuthRouteConfig,
+) -> std::io::Result<AuthDotJson> {
+    match classify_codex_access_token(access_token) {
         CodexAccessToken::PersonalAccessToken(access_token) => {
             let auth = PersonalAccessTokenAuth::load(access_token, auth_route_config).await?;
             ensure_auth_workspace_allowed(forced_chatgpt_workspace_id, auth.account_id())?;
-            AuthDotJson {
+            Ok(AuthDotJson {
                 // Infer PAT auth from the credential field so older Codex builds can still
                 // deserialize auth.json after a rollback.
                 auth_mode: None,
@@ -1021,7 +1124,7 @@ pub async fn login_with_access_token(
                 personal_access_token: Some(access_token.to_string()),
                 bedrock_api_key: None,
                 bedrock_access_keys: None,
-            }
+            })
         }
         CodexAccessToken::AgentIdentityJwt(jwt) => {
             let record = AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
@@ -1031,7 +1134,7 @@ pub async fn login_with_access_token(
                 .trim_end_matches('/')
                 .to_string();
             verified_record_from_jwt(jwt, &base_url, auth_route_config).await?;
-            AuthDotJson {
+            Ok(AuthDotJson {
                 auth_mode: Some(AuthMode::AgentIdentity),
                 openai_api_key: None,
                 tokens: None,
@@ -1040,15 +1143,9 @@ pub async fn login_with_access_token(
                 personal_access_token: None,
                 bedrock_api_key: None,
                 bedrock_access_keys: None,
-            }
+            })
         }
-    };
-    save_auth(
-        codex_home,
-        &auth_dot_json,
-        auth_credentials_store_mode,
-        keyring_backend_kind,
-    )
+    }
 }
 
 fn ensure_auth_workspace_allowed(
@@ -1111,6 +1208,60 @@ pub fn save_auth(
         keyring_backend_kind,
     );
     storage.save(auth)
+}
+
+/// Stores or updates a named profile while preserving the active account.
+pub fn save_profile_auth(
+    codex_home: &Path,
+    profile: AccountProfileMetadata,
+    auth: &AuthDotJson,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> std::io::Result<()> {
+    let storage = create_auth_storage(
+        codex_home.to_path_buf(),
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    );
+    storage.save_profile(profile, auth.clone())
+}
+
+/// Removes an inactive profile and returns its credentials for best-effort revocation.
+pub fn remove_inactive_profile(
+    codex_home: &Path,
+    profile_id: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> std::io::Result<Option<AuthDotJson>> {
+    let storage = create_auth_storage(
+        codex_home.to_path_buf(),
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    );
+    storage.remove_inactive_profile(profile_id)
+}
+
+/// Best-effort revokes and removes one inactive profile without affecting other accounts.
+pub async fn remove_inactive_profile_with_revoke(
+    codex_home: &Path,
+    profile_id: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    auth_route_config: &AuthRouteConfig,
+) -> std::io::Result<bool> {
+    let removed = remove_inactive_profile(
+        codex_home,
+        profile_id,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    )?;
+    let Some(auth) = removed else {
+        return Ok(false);
+    };
+    if let Err(err) = revoke_auth_tokens(Some(&auth), auth_route_config).await {
+        tracing::warn!("failed to revoke removed account profile tokens: {err}");
+    }
+    Ok(true)
 }
 
 /// Load the raw stored auth payload without applying environment overrides.
@@ -2881,12 +3032,31 @@ impl AuthManager {
 
     pub async fn logout_with_revoke(&self) -> std::io::Result<bool> {
         self.ensure_logout_allowed()?;
-        let auth_dot_json = self
+        let cached_auth = self
             .auth_cached()
             .and_then(|auth| auth.get_current_auth_json());
-        if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref(), &self.auth_route_config).await
-        {
-            tracing::warn!("failed to revoke auth tokens during logout: {err}");
+        let mut stored_auth = match load_stored_auth_for_revoke(
+            &self.codex_home,
+            self.auth_credentials_store_mode,
+            self.keyring_backend_kind,
+        ) {
+            Ok(auth) => auth,
+            Err(err) => {
+                tracing::warn!("failed to load stored auth during logout: {err}");
+                Vec::new()
+            }
+        };
+        if let Some(cached_auth) = cached_auth {
+            if stored_auth.is_empty() {
+                stored_auth.push(cached_auth);
+            } else {
+                stored_auth[0] = cached_auth;
+            }
+        }
+        for auth in &stored_auth {
+            if let Err(err) = revoke_auth_tokens(Some(auth), &self.auth_route_config).await {
+                tracing::warn!("failed to revoke auth tokens during logout: {err}");
+            }
         }
         let result = logout_all_stores(
             &self.codex_home,

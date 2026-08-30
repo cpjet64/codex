@@ -18,6 +18,7 @@ use tracing::warn;
 
 use self::atomic_file::replace_auth_file;
 use self::serialized::SerializedAuthStorage;
+use super::AccountProfileMetadata;
 use super::AuthAccountStore;
 use super::BedrockAccessKeysAuth;
 use super::BedrockApiKeyAuth;
@@ -211,6 +212,29 @@ pub(super) trait AuthStorageBackend: Debug + Send + Sync {
         let active_auth = store.active_auth.clone();
         self.save_store(&store)?;
         Ok(active_auth)
+    }
+
+    fn save_profile(
+        &self,
+        metadata: AccountProfileMetadata,
+        auth: AuthDotJson,
+    ) -> std::io::Result<()> {
+        let mut store = self
+            .load_store()?
+            .ok_or_else(|| std::io::Error::other("active auth data is not available"))?;
+        store.save_profile(metadata, auth)?;
+        self.save_store(&store)
+    }
+
+    fn remove_inactive_profile(&self, profile_id: &str) -> std::io::Result<Option<AuthDotJson>> {
+        let mut store = self
+            .load_store()?
+            .ok_or_else(|| std::io::Error::other("active auth data is not available"))?;
+        let removed = store.remove_inactive_profile(profile_id)?;
+        if removed.is_some() {
+            self.save_store(&store)?;
+        }
+        Ok(removed)
     }
 }
 
@@ -824,6 +848,28 @@ impl AuthStorageBackend for EphemeralAuthStorage {
             mutation.apply(&mut account_store.active_auth)?;
             account_store.validate()?;
             Ok(account_store.active_auth.clone())
+        })
+    }
+
+    fn save_profile(
+        &self,
+        metadata: AccountProfileMetadata,
+        auth: AuthDotJson,
+    ) -> std::io::Result<()> {
+        self.with_store(|store, key| {
+            let account_store = store
+                .get_mut(&key)
+                .ok_or_else(|| std::io::Error::other("active auth data is not available"))?;
+            account_store.save_profile(metadata, auth)
+        })
+    }
+
+    fn remove_inactive_profile(&self, profile_id: &str) -> std::io::Result<Option<AuthDotJson>> {
+        self.with_store(|store, key| {
+            let account_store = store
+                .get_mut(&key)
+                .ok_or_else(|| std::io::Error::other("active auth data is not available"))?;
+            account_store.remove_inactive_profile(profile_id)
         })
     }
 
