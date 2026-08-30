@@ -2,15 +2,16 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AccountProfileMetadata;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
-use codex_login::CLIENT_ID;
 use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::logout_with_revoke;
 use codex_login::save_auth;
+use codex_login::save_profile_auth;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
 use codex_protocol::auth::AuthMode;
@@ -82,6 +83,75 @@ async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<
             "token_type_hint": "refresh_token",
             "client_id": "staging-client",
         })
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn logout_with_revoke_revokes_active_and_inactive_profiles() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let _env_guard = EnvGuard::set(
+        REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+        format!("{}/oauth/revoke", server.uri()),
+    );
+    let codex_home = TempDir::new()?;
+    let mode = AuthCredentialsStoreMode::File;
+    let keyring = AuthKeyringBackendKind::default();
+    save_auth(codex_home.path(), &chatgpt_auth(), mode, keyring)?;
+    save_profile_auth(
+        codex_home.path(),
+        AccountProfileMetadata {
+            id: "secondary".to_string(),
+            label: "Secondary".to_string(),
+        },
+        &chatgpt_auth_with_refresh_token("secondary-refresh-token"),
+        mode,
+        keyring,
+    )?;
+
+    assert!(
+        logout_with_revoke(
+            codex_home.path(),
+            mode,
+            keyring,
+            &codex_login::test_support::transport_default_auth_route_config(),
+        )
+        .await?
+    );
+    assert!(!codex_home.path().join("auth.json").exists());
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch revoke requests")?;
+    let mut tokens = Vec::new();
+    for request in requests {
+        let body = request
+            .body_json::<Value>()
+            .context("revoke request should be JSON")?;
+        tokens.push(
+            body["token"]
+                .as_str()
+                .context("revoke request should contain a token")?
+                .to_string(),
+        );
+    }
+    tokens.sort();
+    assert_eq!(
+        tokens,
+        vec![
+            REFRESH_TOKEN.to_string(),
+            "secondary-refresh-token".to_string()
+        ]
     );
     server.verify().await;
     Ok(())
@@ -185,7 +255,7 @@ async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "message": "success"
         })))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
     let _env_guard = EnvGuard::set(
@@ -216,6 +286,16 @@ async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
     )?;
+    save_profile_auth(
+        codex_home.path(),
+        AccountProfileMetadata {
+            id: "secondary".to_string(),
+            label: "Secondary".to_string(),
+        },
+        &chatgpt_auth_with_refresh_token("secondary-refresh-token"),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
 
     let removed = manager.logout_with_revoke().await?;
 
@@ -227,16 +307,27 @@ async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
         .received_requests()
         .await
         .context("failed to fetch revoke requests")?;
-    assert_eq!(requests.len(), 1);
-    assert_eq!(
-        requests[0]
-            .body_json::<Value>()
-            .context("revoke request should be JSON")?,
-        json!({
-            "token": REFRESH_TOKEN,
-            "token_type_hint": "refresh_token",
-            "client_id": CLIENT_ID,
+    let mut revoked_tokens = requests
+        .iter()
+        .map(|request| {
+            request
+                .body_json::<Value>()
+                .context("revoke request should be JSON")
+                .and_then(|body| {
+                    body["token"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .context("revoke request should contain a token")
+                })
         })
+        .collect::<Result<Vec<_>>>()?;
+    revoked_tokens.sort();
+    assert_eq!(
+        revoked_tokens,
+        vec![
+            REFRESH_TOKEN.to_string(),
+            "secondary-refresh-token".to_string(),
+        ]
     );
     server.verify().await;
     Ok(())

@@ -5,7 +5,9 @@ use codex_config::types::AuthCredentialsStoreMode;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::account_store::AccountProfileMetadata;
 use super::manager::save_auth;
+use super::manager::save_profile_auth;
 use super::storage::AuthDotJson;
 use super::storage::AuthKeyringBackendKind;
 use codex_protocol::auth::AuthMode;
@@ -49,6 +51,37 @@ pub fn login_with_bedrock_api_key(
     };
     save_auth(
         codex_home,
+        &auth_dot_json,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+    )
+}
+
+/// Stores Amazon Bedrock API key auth as a named profile without changing the active account.
+pub fn login_with_bedrock_api_key_for_profile(
+    codex_home: &Path,
+    profile: AccountProfileMetadata,
+    api_key: &str,
+    region: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> std::io::Result<()> {
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(AuthMode::BedrockApiKey),
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: None,
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: Some(BedrockApiKeyAuth {
+            api_key: api_key.to_string(),
+            region: region.to_string(),
+        }),
+        bedrock_access_keys: None,
+    };
+    save_profile_auth(
+        codex_home,
+        profile,
         &auth_dot_json,
         auth_credentials_store_mode,
         keyring_backend_kind,

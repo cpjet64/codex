@@ -22,9 +22,15 @@ pub use account_store::InactiveAccountProfile;
 pub use auth_headers::AuthHeaders;
 pub use bedrock_access_keys::BedrockAccessKeysAuth;
 pub use bedrock_access_keys::login_with_bedrock_access_keys;
+pub use bedrock_access_keys::login_with_bedrock_access_keys_for_profile;
 pub use bedrock_api_key::BedrockApiKeyAuth;
 pub use bedrock_api_key::login_with_bedrock_api_key;
+pub use bedrock_api_key::login_with_bedrock_api_key_for_profile;
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;
 pub use manager::*;
 pub use workload_identity::is_workload_identity_selected;
+
+#[cfg(test)]
+#[path = "profile_auth_tests.rs"]
+mod profile_auth_tests;

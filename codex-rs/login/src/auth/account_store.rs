@@ -6,6 +6,8 @@ use super::AuthDotJson;
 
 const ACCOUNT_PROFILES_VERSION: u32 = 1;
 const MAX_PROFILE_LABEL_CHARS: usize = 80;
+const LEGACY_PROFILE_ID: &str = "legacy";
+const LEGACY_PROFILE_LABEL: &str = "Account 1";
 
 /// Stable, non-secret identity and display metadata for an account profile.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -84,6 +86,82 @@ impl AuthAccountStore {
             profiles.validate()?;
         }
         Ok(())
+    }
+
+    pub(crate) fn save_profile(
+        &mut self,
+        metadata: AccountProfileMetadata,
+        auth: AuthDotJson,
+    ) -> std::io::Result<()> {
+        validate_metadata(&metadata)?;
+        let Some(profiles) = self.account_profiles.as_mut() else {
+            return self.add_profile_to_legacy_store(metadata, auth);
+        };
+        if profiles.active_profile.id == metadata.id {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the active account profile cannot be replaced by an add-profile login",
+            ));
+        }
+
+        if let Some(profile) = profiles
+            .inactive_profiles
+            .iter_mut()
+            .find(|profile| profile.metadata.id == metadata.id)
+        {
+            profile.metadata = metadata;
+            profile.auth = auth;
+        } else {
+            profiles
+                .inactive_profiles
+                .push(InactiveAccountProfile { metadata, auth });
+        }
+        self.validate()
+    }
+
+    pub(crate) fn remove_inactive_profile(
+        &mut self,
+        profile_id: &str,
+    ) -> std::io::Result<Option<AuthDotJson>> {
+        let Some(profiles) = self.account_profiles.as_mut() else {
+            return Ok(None);
+        };
+        if profiles.active_profile.id == profile_id {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the active account profile must be switched before it can be removed",
+            ));
+        }
+        let Some(index) = profiles
+            .inactive_profiles
+            .iter()
+            .position(|profile| profile.metadata.id == profile_id)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(profiles.inactive_profiles.remove(index).auth))
+    }
+
+    fn add_profile_to_legacy_store(
+        &mut self,
+        metadata: AccountProfileMetadata,
+        auth: AuthDotJson,
+    ) -> std::io::Result<()> {
+        if metadata.id == LEGACY_PROFILE_ID {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("account profile id {LEGACY_PROFILE_ID:?} is reserved"),
+            ));
+        }
+        self.account_profiles = Some(AccountProfiles {
+            version: ACCOUNT_PROFILES_VERSION,
+            active_profile: AccountProfileMetadata {
+                id: LEGACY_PROFILE_ID.to_string(),
+                label: LEGACY_PROFILE_LABEL.to_string(),
+            },
+            inactive_profiles: vec![InactiveAccountProfile { metadata, auth }],
+        });
+        self.validate()
     }
 }
 

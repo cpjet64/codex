@@ -2,6 +2,7 @@ use super::ActiveAuthMutation;
 use super::AuthStorageBackend;
 use super::canonical_storage_home;
 use super::compute_store_key;
+use crate::auth::AccountProfileMetadata;
 use crate::auth::AuthAccountStore;
 use crate::auth::AuthDotJson;
 use once_cell::sync::Lazy;
@@ -82,5 +83,19 @@ impl AuthStorageBackend for SerializedAuthStorage {
     fn mutate_active(&self, mutation: ActiveAuthMutation) -> std::io::Result<AuthDotJson> {
         let _guard = self.lock()?;
         self.backend.mutate_active(mutation)
+    }
+
+    fn save_profile(
+        &self,
+        metadata: AccountProfileMetadata,
+        auth: AuthDotJson,
+    ) -> std::io::Result<()> {
+        let _guard = self.lock()?;
+        self.backend.save_profile(metadata, auth)
+    }
+
+    fn remove_inactive_profile(&self, profile_id: &str) -> std::io::Result<Option<AuthDotJson>> {
+        let _guard = self.lock()?;
+        self.backend.remove_inactive_profile(profile_id)
     }
 }

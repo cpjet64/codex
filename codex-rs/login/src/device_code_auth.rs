@@ -7,6 +7,7 @@ use serde::de::{self};
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::AccountProfileMetadata;
 use crate::default_client::create_raw_auth_client;
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
@@ -182,6 +183,23 @@ pub async fn complete_device_code_login(
     opts: ServerOptions,
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
+    complete_device_code_login_with_profile(opts, device_code, /*profile*/ None).await
+}
+
+/// Completes device-code login and stores the account as an inactive profile.
+pub async fn complete_device_code_login_for_profile(
+    opts: ServerOptions,
+    device_code: DeviceCode,
+    profile: AccountProfileMetadata,
+) -> std::io::Result<()> {
+    complete_device_code_login_with_profile(opts, device_code, Some(profile)).await
+}
+
+async fn complete_device_code_login_with_profile(
+    opts: ServerOptions,
+    device_code: DeviceCode,
+    profile: Option<AccountProfileMetadata>,
+) -> std::io::Result<()> {
     let base_url = opts.issuer.trim_end_matches('/');
     let client = create_raw_auth_client(base_url, &opts.auth_route_config)?;
     let api_base_url = format!("{base_url}/api/accounts");
@@ -219,22 +237,48 @@ pub async fn complete_device_code_login(
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
     }
 
-    crate::server::persist_tokens_async(
-        &opts.codex_home,
-        /*api_key*/ None,
-        tokens.id_token,
-        tokens.access_token,
-        tokens.refresh_token,
-        opts.cli_auth_credentials_store_mode,
-        opts.auth_keyring_backend_kind,
-    )
-    .await
+    match profile {
+        Some(profile) => {
+            crate::server::persist_tokens_for_profile_async(
+                &opts.codex_home,
+                profile,
+                tokens.id_token,
+                tokens.access_token,
+                tokens.refresh_token,
+                opts.cli_auth_credentials_store_mode,
+                opts.auth_keyring_backend_kind,
+            )
+            .await
+        }
+        None => {
+            crate::server::persist_tokens_async(
+                &opts.codex_home,
+                /*api_key*/ None,
+                tokens.id_token,
+                tokens.access_token,
+                tokens.refresh_token,
+                opts.cli_auth_credentials_store_mode,
+                opts.auth_keyring_backend_kind,
+            )
+            .await
+        }
+    }
 }
 
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let device_code = request_device_code(&opts).await?;
     print_device_code_prompt(&device_code.verification_url, &device_code.user_code);
     complete_device_code_login(opts, device_code).await
+}
+
+/// Runs device-code login and stores the account as an inactive profile.
+pub async fn run_device_code_login_for_profile(
+    opts: ServerOptions,
+    profile: AccountProfileMetadata,
+) -> std::io::Result<()> {
+    let device_code = request_device_code(&opts).await?;
+    print_device_code_prompt(&device_code.verification_url, &device_code.user_code);
+    complete_device_code_login_for_profile(opts, device_code, profile).await
 }
 
 #[cfg(test)]

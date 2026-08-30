@@ -24,9 +24,11 @@ use std::sync::LazyLock;
 use std::thread;
 use std::time::Duration;
 
+use crate::auth::AccountProfileMetadata;
 use crate::auth::AuthDotJson;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
+use crate::auth::save_profile_auth;
 use crate::callback_params::LoginCallbackResult;
 use crate::callback_params::login_callback_result_from_state;
 use crate::default_client::create_raw_auth_client;
@@ -158,6 +160,21 @@ impl ShutdownHandle {
 
 /// Starts a local callback server and returns the browser auth URL.
 pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
+    run_login_server_with_target(opts, AuthPersistenceTarget::Active)
+}
+
+/// Starts browser login and stores the completed account as an inactive profile.
+pub fn run_login_server_for_profile(
+    opts: ServerOptions,
+    profile: AccountProfileMetadata,
+) -> io::Result<LoginServer> {
+    run_login_server_with_target(opts, AuthPersistenceTarget::Profile(profile))
+}
+
+fn run_login_server_with_target(
+    opts: ServerOptions,
+    persistence_target: AuthPersistenceTarget,
+) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
@@ -230,6 +247,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
                                 &pkce,
                                 actual_port,
                                 &state,
+                                &persistence_target,
                             )
                             .await;
 
@@ -330,6 +348,7 @@ async fn process_request(
     pkce: &PkceCodes,
     actual_port: u16,
     state: &str,
+    persistence_target: &AuthPersistenceTarget,
 ) -> HandledRequest {
     let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
         Ok(u) => u,
@@ -434,7 +453,7 @@ async fn process_request(
                     )
                     .await
                     .ok();
-                    if let Err(err) = persist_tokens_async(
+                    if let Err(err) = persist_tokens_with_target_async(
                         &opts.codex_home,
                         api_key.clone(),
                         tokens.id_token.clone(),
@@ -442,6 +461,7 @@ async fn process_request(
                         tokens.refresh_token.clone(),
                         opts.cli_auth_credentials_store_mode,
                         opts.auth_keyring_backend_kind,
+                        persistence_target.clone(),
                     )
                     .await
                     {
@@ -527,6 +547,12 @@ async fn process_request(
         },
         _ => HandledRequest::Response(Response::from_string("Not Found").with_status_code(404)),
     }
+}
+
+#[derive(Clone)]
+pub(crate) enum AuthPersistenceTarget {
+    Active,
+    Profile(AccountProfileMetadata),
 }
 
 /// tiny_http filters `Connection` headers out of `Response` objects, so using
@@ -892,6 +918,51 @@ pub(crate) async fn persist_tokens_async(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> io::Result<()> {
+    persist_tokens_with_target_async(
+        codex_home,
+        api_key,
+        id_token,
+        access_token,
+        refresh_token,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+        AuthPersistenceTarget::Active,
+    )
+    .await
+}
+
+pub(crate) async fn persist_tokens_for_profile_async(
+    codex_home: &Path,
+    profile: AccountProfileMetadata,
+    id_token: String,
+    access_token: String,
+    refresh_token: String,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> io::Result<()> {
+    persist_tokens_with_target_async(
+        codex_home,
+        /*api_key*/ None,
+        id_token,
+        access_token,
+        refresh_token,
+        auth_credentials_store_mode,
+        keyring_backend_kind,
+        AuthPersistenceTarget::Profile(profile),
+    )
+    .await
+}
+
+async fn persist_tokens_with_target_async(
+    codex_home: &Path,
+    api_key: Option<String>,
+    id_token: String,
+    access_token: String,
+    refresh_token: String,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    persistence_target: AuthPersistenceTarget,
+) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -917,12 +988,21 @@ pub(crate) async fn persist_tokens_async(
             bedrock_api_key: None,
             bedrock_access_keys: None,
         };
-        save_auth(
-            &codex_home,
-            &auth,
-            auth_credentials_store_mode,
-            keyring_backend_kind,
-        )
+        match persistence_target {
+            AuthPersistenceTarget::Active => save_auth(
+                &codex_home,
+                &auth,
+                auth_credentials_store_mode,
+                keyring_backend_kind,
+            ),
+            AuthPersistenceTarget::Profile(profile) => save_profile_auth(
+                &codex_home,
+                profile,
+                &auth,
+                auth_credentials_store_mode,
+                keyring_backend_kind,
+            ),
+        }
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
